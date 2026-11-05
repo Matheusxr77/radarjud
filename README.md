@@ -166,7 +166,7 @@ radarjud/
 
 ## 💻 5. Seção 6: Código Backend Flask Conectado ao Comunica PJe + DataJud
 
-Implementação do conector híbrido em [`app/services/cnj_orchestrator.py`](file:///home/mayara.eufrasio/Área%20de%20trabalho/Workspace/radarjud/app/services/cnj_orchestrator.py):
+Implementação do conector híbrido em [`app/services/cnj_orchestrator.py`](app/services/cnj_orchestrator.py):
 
 ```python
 # app/services/cnj_orchestrator.py
@@ -183,7 +183,7 @@ class CNJMetadataOrchestrator:
         self.datajud_base_url = "https://api-publica.datajud.cnj.jus.br"
         self.datajud_key = os.getenv(
             "DATAJUD_API_KEY",
-            "cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw=="
+            ""
         )
         self.session = requests.Session()
         self.session.headers.update({

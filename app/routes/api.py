@@ -18,7 +18,8 @@ def health_check():
     try:
         db.session.execute(text("SELECT 1"))
     except Exception as exc:
-        db_status = f"unavailable: {str(exc)}"
+        logger.warning("Database health check failed: %s", exc)
+        db_status = "unavailable"
 
     return jsonify({
         "status": "healthy",
@@ -93,8 +94,7 @@ def search_company():
     except Exception as exc:
         logger.exception("Erro ao processar busca de empresa: %s", exc)
         return jsonify({
-            "error": "Erro interno ao consultar APIs do CNJ.",
-            "details": str(exc)
+            "error": "Erro interno ao consultar APIs do CNJ."
         }), 500
 
 
@@ -115,8 +115,7 @@ def get_search_history():
     except Exception as exc:
         logger.error("Erro ao listar histórico de pesquisas: %s", exc)
         return jsonify({
-            "error": "Não foi possível carregar o histórico.",
-            "details": str(exc)
+            "error": "Não foi possível carregar o histórico."
         }), 500
 
 
@@ -131,7 +130,5 @@ def get_search_detail(search_id: int):
     except Exception as exc:
         logger.error("Erro ao obter detalhes da pesquisa ID %d: %s", search_id, exc)
         return jsonify({
-            "error": "Registro não encontrado.",
-            "details": str(exc)
+            "error": "Registro não encontrado."
         }), 404
-

@@ -9,13 +9,13 @@ load_dotenv(BASE_DIR / ".env")
 
 class Config:
     """Configuração base da aplicação LexGuard AI."""
-    SECRET_KEY = os.getenv("SECRET_KEY", "lexguard-ai-fallback-secret-key")
+    SECRET_KEY = os.getenv("SECRET_KEY", "dev-insecure-fallback-key")
     DEBUG = False
     TESTING = False
 
     # Banco de Dados PostgreSQL
     POSTGRES_USER = os.getenv("POSTGRES_USER", "radarjud")
-    POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "radarjud_secret_pass")
+    POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
     POSTGRES_DB = os.getenv("POSTGRES_DB", "radarjud")
     POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
     POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
@@ -31,10 +31,7 @@ class Config:
     }
 
     # APIs Públicas Oficiais do Judiciário
-    DATAJUD_API_KEY = os.getenv(
-        "DATAJUD_API_KEY",
-        "cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw=="
-    )
+    DATAJUD_API_KEY = os.getenv("DATAJUD_API_KEY", "")
     DATAJUD_BASE_URL = os.getenv("DATAJUD_BASE_URL", "https://api-publica.datajud.cnj.jus.br")
     COMUNICA_PJE_URL = os.getenv("COMUNICA_PJE_URL", "https://comunicaapi.pje.jus.br/api/v1/comunicacao")
 
@@ -72,4 +69,3 @@ config_by_name = {
     "testing": TestingConfig,
     "default": DevelopmentConfig,
 }
-
