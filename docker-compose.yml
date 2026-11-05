@@ -1,0 +1,64 @@
+services:
+  # Banco de Dados PostgreSQL Conteinerizado
+  db:
+    image: postgres:16-alpine
+    container_name: radarjud_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-radarjud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-radarjud_secret_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-radarjud}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-radarjud} -d ${POSTGRES_DB:-radarjud}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - radarjud_net
+
+  # Backend Flask (LexGuard AI)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: radarjud_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FLASK_ENV: ${FLASK_ENV:-development}
+      FLASK_APP: run.py
+      DEBUG: ${DEBUG:-True}
+      PORT: 5000
+      SECRET_KEY: ${SECRET_KEY:-lexguard-secret-key-change-in-production}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-radarjud}:${POSTGRES_PASSWORD:-radarjud_secret_pass}@db:5432/${POSTGRES_DB:-radarjud}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-radarjud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-radarjud_secret_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-radarjud}
+      DATAJUD_API_KEY: ${DATAJUD_API_KEY:-cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw==}
+      DATAJUD_BASE_URL: ${DATAJUD_BASE_URL:-https://api-publica.datajud.cnj.jus.br}
+      COMUNICA_PJE_URL: ${COMUNICA_PJE_URL:-https://comunicaapi.pje.jus.br/api/v1/comunicacao}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-20}
+      MAX_PROCESSES_PER_QUERY: ${MAX_PROCESSES_PER_QUERY:-100}
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+    networks:
+      - radarjud_net
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  radarjud_net:
+    driver: bridge
+
