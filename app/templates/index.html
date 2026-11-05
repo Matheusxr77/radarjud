@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LexGuard AI - Orquestrador de Risco de Terceiros</title>
+    <!-- Tailwind CSS CDN para suporte visual imediato -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js para visualização do ranking e desfechos -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col items-center justify-center p-6">
+    <div class="max-w-2xl w-full bg-slate-800 border border-slate-700 rounded-xl p-8 shadow-2xl text-center">
+        <div class="inline-block bg-blue-600/20 text-blue-400 font-semibold px-4 py-1.5 rounded-full text-xs uppercase tracking-wider mb-4">
+            LegalTech B2B • Dados Abertos CNJ
+        </div>
+        <h1 class="text-3xl font-bold tracking-tight text-white mb-2">LexGuard AI</h1>
+        <p class="text-slate-400 text-sm mb-6">
+            Diagnóstico Automatizado de Passivo Trabalhista/Cível, Ranking de Motivos TPU e Predição Bayesiana de Condenação via DataJud & Comunica PJe.
+        </p>
+
+        <div class="bg-slate-900/60 rounded-lg p-4 border border-slate-700/60 text-left text-xs text-slate-300 font-mono space-y-2 mb-6">
+            <div class="flex items-center space-x-2">
+                <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                <span>Backend Flask & API REST Operacionais</span>
+            </div>
+            <div>• <span class="text-blue-400">POST /api/v1/search-company</span>: Diagnóstico completo</div>
+            <div>• <span class="text-blue-400">POST /api/v1/company-dashboard</span>: Mini Dashboard + Módulo PLUS</div>
+            <div>• <span class="text-blue-400">GET /api/v1/health</span>: Status do Banco PostgreSQL e Serviços</div>
+        </div>
+
+        <p class="text-xs text-slate-500">
+            Estrutura base do frontend preparada para integração do Mini Dashboard (HTML5 + Tailwind CSS + Chart.js).
+        </p>
+    </div>
+</body>
+</html>
+

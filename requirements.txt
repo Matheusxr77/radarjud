@@ -1,0 +1,24 @@
+# LexGuard AI - Dependências do Backend
+# Python 3.11+ / 3.12+
+
+# Core Web Framework
+Flask>=3.0.0
+Flask-Cors>=4.0.0
+Flask-SQLAlchemy>=3.1.1
+psycopg2-binary>=2.9.9
+
+# HTTP Client & Resiliência
+requests>=2.31.0
+urllib3>=2.0.7
+
+# Configurações & Validação
+python-dotenv>=1.0.1
+pydantic>=2.6.4
+
+# Servidor WSGI de Produção
+gunicorn>=21.2.0
+
+# Testes & Qualidade
+pytest>=8.0.2
+pytest-mock>=3.12.0
+
