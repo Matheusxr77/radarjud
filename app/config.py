@@ -7,6 +7,25 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 
+def _database_url() -> str:
+    configured_url = os.getenv("DATABASE_URL", "").strip()
+    if configured_url:
+        for driver in ("postgresql+psycopg://", "postgresql://"):
+            if configured_url.startswith(driver):
+                return configured_url.replace(
+                    driver, "postgresql+psycopg2://", 1
+                )
+        return configured_url
+
+    return (
+        f"postgresql+psycopg2://{os.getenv('POSTGRES_USER', 'radarjud')}:"
+        f"{os.getenv('POSTGRES_PASSWORD', '')}@"
+        f"{os.getenv('POSTGRES_HOST', 'localhost')}:"
+        f"{os.getenv('POSTGRES_PORT', '5432')}/"
+        f"{os.getenv('POSTGRES_DB', 'radarjud')}"
+    )
+
+
 class Config:
     """Configuração base da aplicação LexGuard AI."""
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-insecure-fallback-key")
@@ -20,10 +39,7 @@ class Config:
     POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
     POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 
-    SQLALCHEMY_DATABASE_URI = os.getenv(
-        "DATABASE_URL",
-        f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-    )
+    SQLALCHEMY_DATABASE_URI = _database_url()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {
         "pool_pre_ping": True,

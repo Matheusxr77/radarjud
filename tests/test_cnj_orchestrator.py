@@ -71,3 +71,21 @@ def test_orchestrator_multi_subject_and_no_keyerror():
             assert preds["Horas Extras"]["probabilidade_condenacao_pct"] > 0
             assert preds["Horas Extras"]["confianca_previsao_pct"] > 0
 
+
+def test_datajud_failure_keeps_processes_found_by_comunica():
+    orchestrator = CNJMetadataOrchestrator()
+    response = MagicMock(ok=False, status_code=429)
+    processes = {
+        "00001234520235020001": {
+            "numero_processo": "00001234520235020001",
+            "tribunal": "trt2",
+            "textos_pje": [],
+        }
+    }
+
+    with patch.object(orchestrator.session, "post", return_value=response):
+        result = orchestrator._enrich_with_datajud(processes)
+
+    assert len(result) == 1
+    assert result[0]["numero_processo"] == "00001234520235020001"
+    assert result[0]["sentence_outcome"] == "em_aberto"
