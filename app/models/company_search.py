@@ -57,6 +57,11 @@ class CompanySearch(db.Model):
         condenacoes = outcomes.get("condenacoes", 0)
         taxa_cond = round((condenacoes / julgados) * 100, 1) if julgados > 0 else (self.overall_risk_score if self.total_processes > 0 else None)
 
+        public_count = max(0, (self.total_processes or 0) - (self.secrecy_count or 0))
+        niveis_sigilo = {"0": public_count}
+        if self.secrecy_count and self.secrecy_count > 0:
+            niveis_sigilo["1"] = self.secrecy_count
+
         return {
             "id": self.id,
             "company_name": self.company_name,
@@ -64,6 +69,8 @@ class CompanySearch(db.Model):
             "total_processes": self.total_processes,
             "secrecy_count": self.secrecy_count,
             "secrecy_rate": self.secrecy_rate,
+            "niveis_sigilo": niveis_sigilo,
+            "taxa_sigilo_pct": round((self.secrecy_rate or 0.0) * 100.0, 1),
             "movements_hash": self.movements_hash,
             "scan_status": self.scan_status,
             "last_checked_at": self.last_checked_at.isoformat() if self.last_checked_at else None,

@@ -20,7 +20,7 @@ services:
     networks:
       - radarjud_net
 
-  # Backend Flask (LexGuard AI)
+  # Backend Flask (RadarJus + radarjusAgent ADK)
   backend:
     build:
       context: .
@@ -47,6 +47,13 @@ services:
       COMUNICA_PJE_URL: ${COMUNICA_PJE_URL:-https://comunicaapi.pje.jus.br/api/v1/comunicacao}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-20}
       MAX_PROCESSES_PER_QUERY: ${MAX_PROCESSES_PER_QUERY:-100}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_MODEL_ID: ${GEMINI_MODEL_ID:-gemini-2.5-flash-lite}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
+      GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-TRUE}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
     ports:
       - "5000:5000"
     volumes:

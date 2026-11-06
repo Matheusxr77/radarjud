@@ -1,4 +1,7 @@
+import sys
+import asyncio
 import logging
+from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from flask import Blueprint, request, jsonify, current_app
@@ -12,6 +15,21 @@ from app.utils.sanitizer import sanitize_company_name, is_cnpj, fetch_cnpj_brasi
 from app.utils.crypto import generate_movements_hash
 
 logger = logging.getLogger(__name__)
+
+# Integração com radarjusAgent (Google ADK + Vertex AI)
+RADARJUS_AGENT_DIR = Path(__file__).resolve().parents[2] / "radarjusAgent"
+if RADARJUS_AGENT_DIR.exists() and str(RADARJUS_AGENT_DIR) not in sys.path:
+    sys.path.insert(0, str(RADARJUS_AGENT_DIR))
+
+try:
+    from main import (
+        executar_pipeline_radarjus as _executar_pipeline_radarjus,
+        _extract_processes_from_realtime_json as _extract_agent_procs,
+    )
+except Exception as _agent_exc:
+    logger.debug("Pipeline completo radarjusAgent indisponível: %s", _agent_exc)
+    _executar_pipeline_radarjus = None
+    _extract_agent_procs = None
 
 api_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 orchestrator = CNJMetadataOrchestrator()
@@ -107,12 +125,56 @@ def health_check():
         "status": "healthy",
         "service": "RadarJus Backend",
         "database": db_status,
+        "agente_adk": "integrated (radarjusAgent)" if _executar_pipeline_radarjus else "local_fallback",
         "apis_governamentais": {
             "datajud": "configured",
             "comunica_pje": "configured",
             "brasilapi": "active"
         }
     }), 200
+
+
+@api_bp.route("/processar", methods=["POST"])
+@api_bp.route("/analisar-empresa", methods=["POST"])
+def run_agent_pipeline():
+    """
+    Executa diretamente o pipeline do agente ADK (radarjusAgent) sobre o JSON em tempo real
+    ou nome/CNPJ da empresa, gerando CSV de auditoria e parecer Súmula 331 do TST.
+    """
+    data = request.get_json(silent=True) or {}
+    company_input = (
+        data.get("company_name")
+        or data.get("empresa")
+        or data.get("name")
+        or ""
+    ).strip() if isinstance(data, dict) else ""
+    cnpj = str(data.get("cnpj") or "").strip() if isinstance(data, dict) else ""
+    processos_in = (
+        _extract_agent_procs(data, company_input)
+        if _extract_agent_procs is not None
+        else None
+    )
+    metricas_pre = data if isinstance(data, dict) and "desfechos_sentencas" in data else None
+
+    if not company_input and not processos_in:
+        return jsonify({"error": "Informe 'company_name' ou a lista 'processos' em JSON."}), 400
+
+    if _executar_pipeline_radarjus is None:
+        return jsonify({"error": "Módulo radarjusAgent não encontrado."}), 500
+
+    try:
+        resultado = asyncio.run(
+            _executar_pipeline_radarjus(
+                empresa=company_input,
+                cnpj=cnpj,
+                processos_in=processos_in,
+                metricas_pre_agregadas=metricas_pre,
+            )
+        )
+        return jsonify(resultado), 200
+    except Exception as exc:
+        logger.exception("Erro ao executar pipeline radarjusAgent: %s", exc)
+        return jsonify({"error": str(exc)}), 500
 
 
 @api_bp.route("/company-dashboard", methods=["POST"])
@@ -166,10 +228,19 @@ def search_company():
                 logger.info("Curto-circuito Nível 1 ativado para '%s' (search_id=%d).", normalized_name, cached_search.id)
                 res = cached_search.to_dict()
                 res["empresa"] = cached_search.company_name
+                res["total_processos"] = cached_search.total_processes
+                res["desfechos_sentencas"] = cached_search.outcomes_summary or {}
+                # Re-executa o Agente ADK sobre os metadados para garantir parecer sempre atualizado
+                fresh_ai = orchestrator.ai_analyzer.analyze_company(res)
+                if fresh_ai:
+                    res["ai_analysis"] = fresh_ai
+                    cached_search.ai_analysis = fresh_ai
+                    db.session.commit()
                 res["cached"] = True
                 res["cache_level"] = "L1_DATABASE"
                 res["search_id"] = cached_search.id
                 res["processos"] = [p.to_dict() for p in cached_search.processes]
+                res["parecer_agente_adk"] = res.get("ai_analysis", {})
                 return jsonify(res), 200
         except Exception as db_err:
             logger.debug("Falha na checagem de cache L1 no banco: %s", db_err)
@@ -210,6 +281,8 @@ def search_company():
             fast_results["ai_analysis"] = cached_search.ai_analysis
             fast_results["cached_ai"] = True
             fast_results["cache_level"] = "L2_HASH_MATCH"
+
+        fast_results["parecer_agente_adk"] = fast_results.get("ai_analysis", {})
 
         # Persistência do resultado no PostgreSQL
         search_id = None
@@ -298,6 +371,7 @@ def get_search_status(search_id: int):
             response["data"] = search.to_dict()
             response["data"]["empresa"] = search.company_name
             response["data"]["processos"] = [p.to_dict() for p in search.processes]
+            response["data"]["parecer_agente_adk"] = response["data"].get("ai_analysis", {})
 
         return jsonify(response), 200
     except Exception as exc:
@@ -402,6 +476,7 @@ def get_search_detail(search_id: int):
         result = search.to_dict()
         result["empresa"] = search.company_name
         result["processos"] = [p.to_dict() for p in search.processes]
+        result["parecer_agente_adk"] = result.get("ai_analysis", {})
         return jsonify(result), 200
     except Exception as exc:
         logger.error("Erro ao obter detalhes da pesquisa ID %d: %s", search_id, exc)
