@@ -904,7 +904,7 @@
       </section>
 
       <!-- SLIDE 2: PROBLEMA -->
-      <section class="slide dark" ">
+      <section class="slide dark">
         <div class="topline">
           <div class="brand"><span class="mark">⚖</span> RadarJus</div>
           <span class="tag">Hack Garanhuns Tech · 2026</span>
@@ -1320,23 +1320,31 @@
               <!-- ==================== CONEXÕES ORTOGONAIS ==================== -->
               <!-- Workstation (Interface Web) -> Barramento Interno -->
               <path
-                d="M 225 155 L 335 155"
+                d="M 225 240 L 335 240"
                 stroke="#286084"
                 stroke-width="3.5"
                 marker-end="url(#arrow-blue)"
               />
-              <text x="280" y="143" text-anchor="middle" fill="#286084" font-size="12" font-weight="800">
+              <text x="280" y="228" text-anchor="middle" fill="#286084" font-size="12" font-weight="800">
                 CNPJ / Nome
               </text>
 
-              <!-- Barramento Interno -> Dashboard Monitor -->
+              <!-- Motor Bayesiano -> Barramento Interno (Retorno) -->
               <path
-                d="M 335 395 L 225 395"
+                d="M 475 375 L 375 375"
                 stroke="#23875d"
                 stroke-width="3.5"
                 marker-end="url(#arrow-green)"
               />
-              <text x="280" y="383" text-anchor="middle" fill="#23875d" font-size="12" font-weight="800">
+
+              <!-- Barramento Interno -> Workstation (Retorno Score) -->
+              <path
+                d="M 335 310 L 225 310"
+                stroke="#23875d"
+                stroke-width="3.5"
+                marker-end="url(#arrow-green)"
+              />
+              <text x="280" y="298" text-anchor="middle" fill="#23875d" font-size="12" font-weight="800">
                 Score &amp; Raio-X
               </text>
 
@@ -1346,14 +1354,6 @@
                 stroke="#286084"
                 stroke-width="3.5"
                 marker-end="url(#arrow-blue)"
-              />
-
-              <!-- Motor Bayesiano -> Barramento Front -->
-              <path
-                d="M 475 375 L 375 375"
-                stroke="#23875d"
-                stroke-width="3.5"
-                marker-end="url(#arrow-green)"
               />
 
               <!-- Orquestrador <-> Barramento Externo (API Bus) -->
@@ -1478,44 +1478,23 @@
 
               <!-- ==================== NÓ 1: INTERFACE WEB (WORKSTATION) ==================== -->
               <g filter="url(#soft-shadow)">
-                <!-- Monitor -->
-                <rect x="65" y="88" width="150" height="102" rx="10" fill="#ffffff" stroke="#152638" stroke-width="3" />
-                <rect x="75" y="98" width="130" height="74" rx="5" fill="#e7f0f5" />
-                <!-- Search UI inside screen -->
-                <rect x="87" y="114" width="106" height="18" rx="4" fill="#ffffff" stroke="#286084" stroke-width="1.8" />
-                <circle cx="97" cy="123" r="4" stroke="#286084" stroke-width="1.8" />
-                <rect x="87" y="140" width="64" height="8" rx="3" fill="#39789e" opacity="0.5" />
-                <rect x="87" y="153" width="86" height="8" rx="3" fill="#39789e" opacity="0.3" />
+                <!-- Monitor ampliado e centralizado à esquerda -->
+                <rect x="55" y="180" width="170" height="116" rx="10" fill="#ffffff" stroke="#152638" stroke-width="3" />
+                <rect x="65" y="190" width="150" height="86" rx="5" fill="#e7f0f5" />
+                <!-- Search UI & Results Preview inside screen -->
+                <rect x="77" y="204" width="126" height="20" rx="4" fill="#ffffff" stroke="#286084" stroke-width="1.8" />
+                <circle cx="88" cy="214" r="4" stroke="#286084" stroke-width="1.8" />
+                <rect x="77" y="232" width="75" height="9" rx="3" fill="#39789e" opacity="0.6" />
+                <rect x="77" y="246" width="100" height="9" rx="3" fill="#23875d" opacity="0.6" />
                 <!-- Stand -->
-                <path d="M 122 190 L 112 212 L 168 212 L 158 190 Z" fill="#dce2e7" stroke="#152638" stroke-width="2.5" />
-                <line x1="98" y1="212" x2="182" y2="212" stroke="#152638" stroke-width="3.5" stroke-linecap="round" />
+                <path d="M 125 296 L 115 320 L 175 320 L 165 296 Z" fill="#dce2e7" stroke="#152638" stroke-width="2.5" />
+                <line x1="98" y1="320" x2="192" y2="320" stroke="#152638" stroke-width="3.5" stroke-linecap="round" />
               </g>
-              <text x="140" y="240" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
+              <text x="140" y="355" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
                 1. Interface Web
               </text>
-              <text x="140" y="261" text-anchor="middle" fill="#5a6b7e" font-size="14" font-weight="600">
+              <text x="140" y="376" text-anchor="middle" fill="#5a6b7e" font-size="14" font-weight="600">
                 HTML · Tailwind · JS
-              </text>
-
-              <!-- ==================== NÓ 6: DASHBOARD (MONITOR DE RISCO) ==================== -->
-              <g filter="url(#soft-shadow)">
-                <rect x="65" y="325" width="150" height="105" rx="10" fill="#ffffff" stroke="#23875d" stroke-width="3" />
-                <rect x="75" y="335" width="130" height="77" rx="5" fill="#e1f2e9" />
-                <!-- Bar chart inside screen -->
-                <rect x="92" y="380" width="16" height="22" rx="2" fill="#286084" />
-                <rect x="116" y="366" width="16" height="36" rx="2" fill="#8a6049" />
-                <rect x="140" y="350" width="16" height="52" rx="2" fill="#23875d" />
-                <circle cx="178" cy="364" r="14" fill="#ffffff" stroke="#23875d" stroke-width="3" />
-                <polyline points="172 364 176 368 185 359" stroke="#23875d" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
-                <!-- Stand -->
-                <path d="M 122 430 L 112 452 L 168 452 L 158 430 Z" fill="#dce2e7" stroke="#152638" stroke-width="2.5" />
-                <line x1="98" y1="452" x2="182" y2="452" stroke="#152638" stroke-width="3.5" stroke-linecap="round" />
-              </g>
-              <text x="140" y="480" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
-                6. Dashboard
-              </text>
-              <text x="140" y="501" text-anchor="middle" fill="#23875d" font-size="14" font-weight="700">
-                Desfechos &amp; Confiança
               </text>
 
               <!-- ==================== NÓ 2: ORQUESTRADOR (SERVER TOWER) ==================== -->
@@ -1561,7 +1540,7 @@
                 </text>
               </g>
               <text x="555" y="464" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
-                5. Motor Estatístico
+                4. Motor Estatístico
               </text>
               <text x="555" y="485" text-anchor="middle" fill="#5a6b7e" font-size="14" font-weight="600">
                 Inferência Bayesiana
@@ -1606,7 +1585,7 @@
                 <path d="M 1098 378 C 1098 385 1158 385 1158 378" stroke="#286084" stroke-width="2" fill="none" />
               </g>
               <text x="1128" y="446" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
-                4. DataJud · CNJ
+                5. DataJud · CNJ
               </text>
               <text x="1128" y="467" text-anchor="middle" fill="#5a6b7e" font-size="14" font-weight="600">
                 Metadados Processuais JSON
@@ -1615,12 +1594,11 @@
           </div>
         </div>
         <div class="footer">
-          <span>PYTHON / FLASK / DATAJUD / COMUNICA PJE</span
-          ><
+          <span>PYTHON / FLASK / DATAJUD / COMUNICA PJE</span>
         </div>
       </section>
 
-      <!-- SLIDE 6: NEGÓCIO E PRÓXIMO PASSO -->
+      <!-- SLIDE 7: NEGÓCIO E PRÓXIMO PASSO -->
       <section class="slide dark" data-time="2:30–3:00">
         <div class="topline">
           <div class="brand"><span class="mark">⚖</span> RadarJus</div>
@@ -1657,12 +1635,11 @@
           </div>
         </div>
         <div class="footer">
-          <span>RADARJUS · INTELIGÊNCIA JURÍDICA PARA GESTÃO DE TERCEIROS</span
-          >
+          <span>RADARJUS · INTELIGÊNCIA JURÍDICA PARA GESTÃO DE TERCEIROS</span>
         </div>
       </section>
 
-      <!-- SLIDE 7: EQUIPE -->
+      <!-- SLIDE 8: EQUIPE -->
       <section class="slide" data-time="Equipe">
         <div class="topline">
           <div class="brand">
@@ -1673,16 +1650,11 @@
         <div class="slide-body">
           <div class="eyebrow">Quem constrói o RadarJus</div>
           <h2>Nossa <span class="accent">equipe.</span></h2>
-          <!-- <p style="max-width: 75vw">
-            Competências complementares em tecnologia, dados, negócios e
-            inteligência jurídica para transformar a gestão de risco de
-            terceiros.
-          </p> -->
 
           <div class="team-grid">
             <div class="team-card">
               <div class="team-avatar">
-                <img src="fotos/claudio.png" alt="Cláudio Farias" />
+                <img src="../../fotos/claudio.png" alt="Cláudio Farias" />
               </div>
               <div class="team-name">Cláudio Farias</div>
               <span class="team-role">Designer / Desenvolvedor Front-end</span>
@@ -1690,7 +1662,7 @@
 
             <div class="team-card">
               <div class="team-avatar">
-                <img src="fotos/laryssa.png" alt="Laryssa Falcão" />
+                <img src="../../fotos/laryssa.png" alt="Laryssa Falcão" />
               </div>
               <div class="team-name">Laryssa Falcão</div>
               <span class="team-role">Engenheira de Dados</span>
@@ -1698,7 +1670,7 @@
 
             <div class="team-card">
               <div class="team-avatar">
-                <img src="fotos/luana.png" alt="Luana Vitória" />
+                <img src="../../fotos/luana.png" alt="Luana Vitória" />
               </div>
               <div class="team-name">Luana Brito</div>
               <span class="team-role">Engenheira de IA e DevOps</span>
@@ -1706,7 +1678,7 @@
 
             <div class="team-card">
               <div class="team-avatar">
-                <img src="fotos/matheus.png" alt="Matheus Marcos" />
+                <img src="../../fotos/matheus.png" alt="Matheus Marcos" />
               </div>
               <div class="team-name">Matheus Marcos</div>
               <span class="team-role">Desenvolvedor Back-end</span>
@@ -1714,7 +1686,7 @@
 
             <div class="team-card">
               <div class="team-avatar">
-                <img src="fotos/mayara.png" alt="Mayara Karoline" />
+                <img src="../../fotos/mayara.png" alt="Mayara Karoline" />
               </div>
               <div class="team-name">Mayara Karoline</div>
               <span class="team-role">Tech Lead / Cientista de IA</span>
@@ -1723,12 +1695,11 @@
         </div>
         <div class="footer">
           <span>EQUIPE RADARJUS · SQUAD MULTIDISCIPLINAR</span>
-         
         </div>
       </section>
 
       <div class="controls">
-        <div class="counter" id="counter">01 / 07</div>
+        <div class="counter" id="counter">01 / 08</div>
         <button id="prev" aria-label="Anterior">‹</button>
         <button id="next" aria-label="Próximo">›</button>
       </div>
@@ -1784,3 +1755,9 @@
     </script>
   </body>
 </html>
+```eof
+
+O slide de **Arquitetura e Escala** foi atualizado com as seguintes alterações:
+1. O nó visual do **Dashboard (Monitor de Risco)** foi removido do diagrama.
+2. A **Interface Web (Workstation)** foi ampliada e centralizada verticalmente no lado esquerdo.
+3. O fluxo de dados foi reconectado diretamente entre o barramento interno e a Interface Web para retornar a pontuação e raio-x diretamente ao usuário.
