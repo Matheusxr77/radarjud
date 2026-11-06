@@ -5,6 +5,9 @@ import math
 import time
 import requests
 from collections import Counter, defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class CNJMetadataOrchestrator:
@@ -79,7 +82,19 @@ class CNJMetadataOrchestrator:
         for num_proc, info in processes_map.items():
             by_tribunal[info["tribunal"]].append(num_proc)
 
-        enriched = []
+        enriched_by_number = {
+            num_proc: {
+                "numero_processo": num_proc,
+                "subjects": ["Outros Motivos Trabalhistas"],
+                "nivelSigilo": 0,
+                "sentence_outcome": "em_aberto",
+                "has_expert_report": any(
+                    marker in " ".join(info.get("textos_pje", []))
+                    for marker in ("laudo pericial", "perícia técnica")
+                ),
+            }
+            for num_proc, info in processes_map.items()
+        }
         headers = {
             "Authorization": f"APIKey {self.datajud_key}",
             "Content-Type": "application/json"
@@ -102,12 +117,15 @@ class CNJMetadataOrchestrator:
                 if not resp.ok:
                     continue
                 hits = resp.json().get("hits", {}).get("hits", [])
-            except requests.RequestException:
+            except (requests.RequestException, ValueError) as exc:
+                logger.warning("DataJud indisponível para o tribunal '%s': %s", tribunal, exc)
                 continue
 
             for hit in hits:
                 src = hit.get("_source", {})
                 num = src.get("numeroProcesso")
+                if num not in processes_map:
+                    continue
                 pje_texts = " ".join(processes_map.get(num, {}).get("textos_pje", []))
 
                 raw_assuntos = src.get("assuntos") or []
@@ -128,15 +146,15 @@ class CNJMetadataOrchestrator:
 
                 has_expert = (83 in mov_codes) or ("laudo pericial" in pje_texts) or ("perícia técnica" in pje_texts)
 
-                enriched.append({
+                enriched_by_number[num] = {
                     "numero_processo": num,
                     "subjects": list(set(subjects)),
                     "nivelSigilo": src.get("nivelSigilo", 0),
                     "sentence_outcome": outcome,
                     "has_expert_report": has_expert
-                })
+                }
 
-        return enriched
+        return list(enriched_by_number.values())
 
     def analyze_company_by_name(self, company_name: str) -> dict:
         cache_key = company_name.strip().lower()
