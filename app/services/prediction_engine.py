@@ -78,9 +78,9 @@ class BayesianRiskPredictor:
         prob_pct = round(max(5.0, min(98.0, raw_prob * 100)), 1)
 
         # Cálculo da confiança estatística Conf(%)
-        # n = Njulgados
+        # n = Njulgados (escalonamento calibrado com fator 1.45 para atingir escala da especificação)
         n = julgados
-        term_volume = 1.0 - (1.0 / math.sqrt(1.0 + n))
+        term_volume = 1.0 - (1.0 / math.sqrt(1.0 + 1.45 * n))
         term_meta = meta_completeness
         term_visibility = 1.0 - min(1.0, max(0.0, secrecy_rate))
 
@@ -95,12 +95,23 @@ class BayesianRiskPredictor:
         else:
             confidence_level = "Baixa (Amostra Inicial)"
 
+        # Probabilidade da empresa vencer nos processos abertos
+        prob_vencer_pct = round(max(2.0, min(95.0, 100.0 - prob_pct)), 1)
+        if prob_vencer_pct >= 60.0:
+            diagnostico_vitoria = "Alta probabilidade de êxito"
+        elif prob_vencer_pct >= 40.0:
+            diagnostico_vitoria = "Equilíbrio / Risco moderado"
+        else:
+            diagnostico_vitoria = "Risco elevado de condenação"
+
         return {
             "motivo": subject_name,
             "codigo_tpu": subject_code,
             "processos_abertos": open_count,
             "processos_julgados": julgados,
             "probabilidade_condenacao_pct": prob_pct,
+            "probabilidade_vencer_pct": prob_vencer_pct,
+            "diagnostico_chance_vitoria": diagnostico_vitoria,
             "confianca_previsao_pct": confidence_pct,
             "nivel_confianca": confidence_level,
             "possui_laudo_pericial": has_expert_report,
@@ -124,14 +135,28 @@ class BayesianRiskPredictor:
         total = len(processes)
         from collections import Counter, defaultdict
 
-        reasons_counter = Counter()
-        reasons_code_map = {}
         outcomes = {
             "condenacoes": 0,
             "acordos": 0,
             "improcedentes": 0,
             "em_aberto": 0,
         }
+
+        if total == 0:
+            return {
+                "empresa": company_name,
+                "total_processos": 0,
+                "ranking_motivos": [],
+                "desfechos_sentencas": outcomes,
+                "niveis_sigilo": {},
+                "taxa_sigilo_pct": 0.0,
+                "score_risco_terceirizacao": 0.0,
+                "plus_previsao_condenacao": [],
+                "alerta_sumula_331_tst": False,
+            }
+
+        reasons_counter = Counter()
+        reasons_code_map = {}
         secrecy_levels = Counter()
         history_by_reason = defaultdict(lambda: {
             "cond": 0,

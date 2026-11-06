@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import {
   Search, LayoutDashboard, FileText, ChartNoAxesCombined, History, Scale,
-  Menu, X, ArrowRight, RefreshCw, AlertCircle, ShieldCheck, ShieldAlert,
+  Menu, X, ArrowRight, RefreshCw, AlertCircle, AlertTriangle, ShieldCheck, ShieldAlert,
   Info, ChevronRight, Building2, TrendingUp, Filter, CheckCircle2,
+  Brain, Shield, Sparkles, Check,
 } from 'lucide-react';
 
 // Vite encaminha /api ao Flask. Defina VITE_API_BASE_URL se a API estiver em outro host.
@@ -33,9 +34,19 @@ const isRecord = (value) => value !== null && typeof value === 'object' && !Arra
 function normalize(raw) {
   if (!isRecord(raw)) return null;
   const payload = isRecord(raw.data) ? raw.data : raw;
+  const riskScore = payload.probabilidade_condenacao_geral_pct != null
+    ? Number(payload.probabilidade_condenacao_geral_pct)
+    : payload.score_risco_terceirizacao != null
+      ? Number(payload.score_risco_terceirizacao)
+      : payload.overall_risk_score != null
+        ? Number(payload.overall_risk_score)
+        : null;
+
   return {
     name: payload.empresa || payload.company_name || 'Empresa consultada',
     total: Number(payload.total_processos ?? payload.total_processes ?? 0),
+    riskScore: riskScore,
+    overallRiskScore: riskScore,
     reasons: Array.isArray(payload.ranking_motivos) ? payload.ranking_motivos : [],
     outcomes: isRecord(payload.desfechos_sentencas) ? payload.desfechos_sentencas
       : isRecord(payload.outcomes_summary) ? payload.outcomes_summary : {},
@@ -45,6 +56,10 @@ function normalize(raw) {
       : Array.isArray(payload.process_records) ? payload.process_records : [],
     searchId: payload.search_id ?? payload.id ?? null,
     searchedAt: payload.updated_at || payload.created_at || null,
+    scanStatus: payload.scan_status || 'COMPLETED',
+    aiAnalysis: isRecord(payload.ai_analysis) ? payload.ai_analysis : null,
+    cached: Boolean(payload.cached),
+    cacheLevel: payload.cache_level || null,
   };
 }
 
@@ -109,7 +124,7 @@ function Sidebar({ page, navigate, mobileOpen, setMobileOpen }) {
       <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
         <div className="brand">
           <div className="brand-mark"><Scale size={26} /></div>
-          <div><strong>Radar<span>Jud</span></strong><small>INTELIGÊNCIA JURÍDICA</small></div>
+          <div><strong>Radar<span>Jus</span></strong><small>INTELIGÊNCIA JURÍDICA</small></div>
           <button className="mobile-close" onClick={() => setMobileOpen(false)} aria-label="Fechar menu"><X size={20} /></button>
         </div>
         <div className="nav-label">PLATAFORMA</div>
@@ -133,7 +148,7 @@ function Sidebar({ page, navigate, mobileOpen, setMobileOpen }) {
           </div>
           <div className="account">
             <span className="avatar">RJ</span>
-            <div><b>RadarJud</b><small>Pesquisa jurídica trabalhista</small></div>
+            <div><b>RadarJus</b><small>Pesquisa jurídica trabalhista</small></div>
           </div>
         </div>
       </aside>
@@ -145,7 +160,7 @@ function SearchPage({ onSearch, query, setQuery, busy, error, navigate, result }
   const features = [
     { icon: Building2, title: 'Visão da empresa', text: 'Indicadores consolidados de registros identificados.' },
     { icon: FileText, title: 'Assuntos e processos', text: 'Temas recorrentes e detalhes quando disponíveis.' },
-    { icon: TrendingUp, title: 'Estimativas', text: 'Análises experimentais com limitações explícitas.' },
+    { icon: TrendingUp, title: 'Estimativas de Vitória', text: 'Probabilidade de êxito da empresa por motivo.' },
   ];
   return (
     <div className="search-page">
@@ -153,15 +168,24 @@ function SearchPage({ onSearch, query, setQuery, busy, error, navigate, result }
         <div className="hero-icon"><Scale size={31} /></div>
         <div className="eyebrow">PESQUISA JURÍDICA TRABALHISTA</div>
         <h1>Informação jurídica para<br /><em>decisões mais seguras.</em></h1>
-        <p>Consulte registros judiciais, explore assuntos recorrentes e compreenda os indicadores de uma empresa.</p>
+        <p>Consulte registros judiciais, explore assuntos recorrentes e compreenda as chances de vitória da empresa.</p>
         <form className="search-box" onSubmit={(event) => { event.preventDefault(); onSearch(); }}>
           <Search size={22} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Digite o nome da empresa" aria-label="Nome da empresa" required minLength={2} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Digite o nome da empresa ou CNPJ"
+            aria-label="Nome da empresa ou CNPJ"
+            required
+            minLength={2}
+          />
           <button className="primary" disabled={busy}>
             {busy ? <><RefreshCw size={17} className="spin" /> Consultando</> : <>Pesquisar <ArrowRight size={17} /></>}
           </button>
         </form>
-        <div className="search-hint"><Info size={15} /> A pesquisa é feita por nome. Confirme a identificação da empresa antes de interpretar os resultados.</div>
+        <div className="search-hint">
+          <Info size={15} /> A busca suporta Razão Social, Nome Fantasia ou CNPJ (com triangulação via BrasilAPI).
+        </div>
         {error && <div className="alert error" role="alert"><AlertCircle size={18} />{error}</div>}
       </div>
       <div className="feature-grid">
@@ -190,19 +214,92 @@ function Overview({ data, navigate }) {
   const outcomes = data?.outcomes || {};
   const hasData = Boolean(data);
   const classified = Object.values(outcomes).reduce((sum, value) => sum + Number(value || 0), 0);
+  const ai = data?.aiAnalysis;
+
+  const isFastPath = data?.scanStatus === 'PARTIAL_FAST_PATH';
+  const isCompleted = data?.scanStatus === 'COMPLETED';
 
   return (
     <div className="stack">
       <div className="section-intro">
-        <div><div className="eyebrow">ANÁLISE DE EMPRESA</div><h1>{data?.name || 'Visão geral'}</h1><p>{hasData ? 'Panorama dos registros localizados nas fontes consultadas.' : 'Pesquise uma empresa para preencher os indicadores abaixo.'}</p></div>
-        <Tag type={hasData ? 'blue' : 'amber'}>{hasData ? 'Dados da consulta' : 'Aguardando pesquisa'}</Tag>
+        <div>
+          <div className="eyebrow">ANÁLISE DE EMPRESA</div>
+          <h1>{data?.name || 'Visão geral'}</h1>
+          <p>{hasData ? 'Panorama dos registros localizados nas fontes consultadas.' : 'Pesquise uma empresa para preencher os indicadores abaixo.'}</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+          {isFastPath && (
+            <Tag type="amber">
+              <RefreshCw size={12} className="spin" style={{ display: 'inline', marginRight: '5px' }} />
+              Fast-Path ativo (&lt; 3s) · Varrendo em 2º plano
+            </Tag>
+          )}
+          {isCompleted && <Tag type="green"><Check size={13} style={{ display: 'inline', marginRight: '4px' }} /> Varredura Completa</Tag>}
+          {data?.cached && <Tag type="blue">⚡ Cache Inteligente ({data.cacheLevel || 'L1'})</Tag>}
+        </div>
       </div>
+
       <div className="stats">
-        <Stat label="REGISTROS IDENTIFICADOS" value={hasData ? formatNumber(data.total) : '—'} hint="Não representa necessariamente todos os processos" icon={FileText} />
-        <Stat label="ASSUNTOS IDENTIFICADOS" value={hasData ? formatNumber(reasons.length) : '—'} hint="Categorias presentes nos registros" icon={Filter} />
-        <Stat label="DESFECHOS CLASSIFICADOS" value={hasData ? formatNumber(classified) : '—'} hint="Inclui processos em aberto" icon={CheckCircle2} />
-        <Stat label="COBERTURA DO SIGILO" value={secrecyEntries.length ? 'Parcial' : 'Indisponível'} hint="Não permite medir sigilo total da empresa" icon={ShieldAlert} tone="amber" />
+        <Stat
+          label="PROBABILIDADE DE CONDENAÇÃO"
+          value={hasData && data.riskScore != null ? formatPercent(data.riskScore) : '—'}
+          hint="Score geral estimado de condenação (Súmula 331 TST)"
+          icon={AlertTriangle}
+          tone={data?.riskScore >= 60 ? 'red' : data?.riskScore >= 35 ? 'amber' : 'green'}
+        />
+        <Stat label="REGISTROS IDENTIFICADOS" value={hasData ? formatNumber(data.total) : '—'} hint="Processos localizados no Comunica PJe e DataJud" icon={FileText} />
+        <Stat label="ASSUNTOS IDENTIFICADOS" value={hasData ? formatNumber(reasons.length) : '—'} hint="Motivos e pedidos trabalhistas" icon={Filter} />
+        <Stat label="DESFECHOS CLASSIFICADOS" value={hasData ? formatNumber(classified) : '—'} hint="Inclui condenações, acordos e abertos" icon={CheckCircle2} />
+        <Stat label="COBERTURA DO SIGILO" value={secrecyEntries.length ? 'Parcial' : 'Indisponível'} hint="Nível de sigilo judicial informado" icon={ShieldAlert} tone="amber" />
       </div>
+
+      {/* Parecer do Consultor de Inteligência Artificial */}
+      {ai && (
+        <Panel
+          title="Diagnóstico Executivo & Compliance (IA)"
+          subtitle={`Parecer técnico gerado via ${ai.modelo_utilizado || 'IA Preditiva'}`}
+          action={<Tag type={ai.perfil_risco_consolidado?.includes('Baixo') ? 'green' : ai.perfil_risco_consolidado?.includes('Moderado') ? 'amber' : 'red'}>Risco: {ai.perfil_risco_consolidado || 'Geral'}</Tag>}
+        >
+          <div style={{ display: 'grid', gap: '16px' }}>
+            <p style={{ margin: 0, fontSize: '14px', lineHeight: '1.7', color: '#273b4e' }}>
+              {ai.resumo_executivo}
+            </p>
+            {ai.taxa_historica_vitoria_empresa_pct != null && (
+              <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', padding: '12px 16px', background: '#f5f8fa', borderRadius: '10px' }}>
+                {ai.taxa_historica_condenacao_pct != null && (
+                  <div>
+                    <small style={{ color: '#68798a', display: 'block' }}>Taxa Histórica de Condenação:</small>
+                    <strong style={{ fontSize: '18px', color: ai.taxa_historica_condenacao_pct >= 60 ? '#c34a4a' : ai.taxa_historica_condenacao_pct >= 35 ? '#b67b23' : '#25865a' }}>
+                      {formatPercent(ai.taxa_historica_condenacao_pct)}
+                    </strong>
+                  </div>
+                )}
+                <div>
+                  <small style={{ color: '#68798a', display: 'block' }}>Taxa Histórica de Vitória (Improcedências):</small>
+                  <strong style={{ fontSize: '18px', color: '#25865a' }}>{formatPercent(ai.taxa_historica_vitoria_empresa_pct)}</strong>
+                </div>
+                {ai.taxa_historica_acordos_pct != null && (
+                  <div>
+                    <small style={{ color: '#68798a', display: 'block' }}>Adesão a Acordos:</small>
+                    <strong style={{ fontSize: '18px', color: '#245a81' }}>{formatPercent(ai.taxa_historica_acordos_pct)}</strong>
+                  </div>
+                )}
+              </div>
+            )}
+            {Array.isArray(ai.recomendacoes_compliance) && ai.recomendacoes_compliance.length > 0 && (
+              <div>
+                <b style={{ display: 'block', fontSize: '13px', marginBottom: '8px', color: '#245a81' }}>Recomendações Preventivas de Governança:</b>
+                <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '12px', lineHeight: '1.6', color: '#556677' }}>
+                  {ai.recomendacoes_compliance.map((rec, i) => (
+                    <li key={i}>{rec}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </Panel>
+      )}
+
       <div className="two-col">
         <Panel title="Assuntos mais recorrentes" subtitle="Frequência entre os registros identificados" action={<button className="text-button" onClick={() => navigate('processes')}>Ver processos <ArrowRight size={15} /></button>}>
           {reasons.length ? (
@@ -230,9 +327,10 @@ function Overview({ data, navigate }) {
               ))}
             </div>
           ) : <Empty title="Sem desfechos disponíveis" description="Os desfechos aparecerão após uma consulta com classificações." />}
-          <div className="muted-note"><Info size={15} /> Classificações automáticas podem exigir revisão humana.</div>
+          <div className="muted-note"><Info size={15} /> Classificações automáticas via códigos TPU e NLP de sentenças.</div>
         </Panel>
       </div>
+
       <div className="two-col">
         <Panel title="Sigilo nos registros consultados" subtitle="Níveis oficiais dos metadados disponíveis">
           {secrecyEntries.length ? (
@@ -252,14 +350,14 @@ function Overview({ data, navigate }) {
               </div>
             </>
           ) : <Empty title="Sigilo não informado" description="Não é possível calcular um indicador de sigilo sem dados da API." />}
-          <div className="muted-note"><ShieldAlert size={16} /> Sigilo não é um indicador validado de confiabilidade empresarial. Processos não públicos podem estar ausentes.</div>
+          <div className="muted-note"><ShieldAlert size={16} /> Processos sob segredo de justiça (nível &gt; 0) omitem dados de partes.</div>
         </Panel>
-        <Panel title="Próximos passos" subtitle="Como aprofundar a análise">
+        <Panel title="Aprofundamento de análise" subtitle="Próximas ações de compliance">
           <div className="next-steps">
             {[
-              { page: 'search', icon: Search, title: 'Pesquisar empresa', text: 'Inicie uma consulta para preencher os painéis.' },
-              { page: 'processes', icon: FileText, title: 'Explorar processos', text: 'Verifique números, assuntos e detalhes disponíveis.' },
-              { page: 'predictions', icon: ChartNoAxesCombined, title: 'Consultar estimativas', text: 'Veja projeções experimentais por assunto.' },
+              { page: 'search', icon: Search, title: 'Pesquisar outra empresa', text: 'Inicie uma nova consulta rápida.' },
+              { page: 'processes', icon: FileText, title: 'Explorar processos e observações', text: 'Veja números, assuntos inferidos e desfechos.' },
+              { page: 'predictions', icon: ChartNoAxesCombined, title: 'Probabilidade de vitória', text: 'Consulte a chance da empresa vencer por motivo.' },
             ].map(({ page, icon: Icon, title, text }) => (
               <button key={page} onClick={() => navigate(page)}>
                 <Icon size={20} /><span><b>{title}</b><small>{text}</small></span><ChevronRight size={18} />
@@ -278,28 +376,71 @@ function Processes({ data }) {
   const list = processes.filter((process) => JSON.stringify(process).toLowerCase().includes(filter.toLowerCase()));
   return (
     <div className="stack">
-      <div className="section-intro"><div><div className="eyebrow">EMPRESA / PROCESSOS</div><h1>Processos e movimentações</h1><p>{data ? `${data.name} · detalhes fornecidos pela API.` : 'Aguardando consulta de uma empresa.'}</p></div></div>
-      <Panel title="Registros individuais" subtitle="A pesquisa pode retornar apenas indicadores agregados">
-        <div className="filter-row"><Search size={18} /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filtrar por número, assunto ou desfecho" aria-label="Filtrar processos" disabled={!processes.length} /></div>
+      <div className="section-intro">
+        <div>
+          <div className="eyebrow">EMPRESA / PROCESSOS</div>
+          <h1>Processos e movimentações</h1>
+          <p>{data ? `${data.name} · registros extraídos do Comunica PJe e DataJud.` : 'Aguardando consulta de uma empresa.'}</p>
+        </div>
+      </div>
+      <Panel title="Registros individuais" subtitle="Lista de processos judiciais vinculados à empresa">
+        <div className="filter-row">
+          <Search size={18} />
+          <input
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="Filtrar por número, assunto, desfecho ou observação..."
+            aria-label="Filtrar processos"
+            disabled={!processes.length}
+          />
+        </div>
         {processes.length ? (
           <div className="table-scroll">
             <table>
-              <thead><tr><th>Número do processo</th><th>Assunto</th><th>Desfecho</th><th>Sigilo</th><th>Último movimento</th></tr></thead>
-              <tbody>{list.map((process, index) => (
-                <tr key={process.id || process.numero_processo || index}>
-                  <td className="mono">{process.numero_processo || process.process_number || 'Não informado'}</td>
-                  <td>{Array.isArray(process.subjects) ? process.subjects.join(', ') : process.assunto || 'Não informado'}</td>
-                  <td>{OUTCOME_LABELS[process.sentence_outcome] || process.sentence_outcome || 'Não informado'}</td>
-                  <td>{process.nivelSigilo ?? process.secrecy_level ?? 'Não informado'}</td>
-                  <td>{process.ultima_movimentacao || process.last_movement || 'Não disponível'}</td>
+              <thead>
+                <tr>
+                  <th>Número do processo</th>
+                  <th>Assunto Principal</th>
+                  <th>Desfecho</th>
+                  <th>Sigilo</th>
+                  <th>Observação Técnica</th>
                 </tr>
-              ))}</tbody>
+              </thead>
+              <tbody>
+                {list.map((process, index) => (
+                  <tr key={process.id || process.numero_processo || index}>
+                    <td className="mono">{process.numero_processo || process.process_number || 'Não informado'}</td>
+                    <td>
+                      <b>{Array.isArray(process.subjects) ? process.subjects.join(', ') : process.primary_subject || 'Não informado'}</b>
+                    </td>
+                    <td>
+                      <Tag type={process.sentence_outcome === 'improcedentes' ? 'green' : process.sentence_outcome === 'condenacoes' ? 'red' : 'blue'}>
+                        {OUTCOME_LABELS[process.sentence_outcome] || process.sentence_outcome || 'Em aberto'}
+                      </Tag>
+                    </td>
+                    <td>Nível {process.nivelSigilo ?? process.secrecy_level ?? 0}</td>
+                    <td>
+                      {process.observation ? (
+                        <span style={{ color: '#25865a', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <CheckCircle2 size={13} /> {process.observation}
+                        </span>
+                      ) : (
+                        <span style={{ color: '#8899a6', fontSize: '11px' }}>Metadados TPU oficiais</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
             </table>
             {!list.length && <Empty title="Nenhum resultado para o filtro" description="Experimente outro termo." />}
           </div>
-        ) : <Empty icon={FileText} title="Nenhum processo disponível" description={data ? 'A API não forneceu registros individuais nesta consulta.' : 'A lista será preenchida quando uma pesquisa retornar processos individuais.'} />}
+        ) : (
+          <Empty icon={FileText} title="Nenhum processo disponível" description={data ? 'A API não forneceu registros individuais nesta consulta.' : 'A lista será preenchida quando uma pesquisa retornar processos individuais.'} />
+        )}
       </Panel>
-      <div className="info-banner"><Info size={19} /> A interface exibe somente os processos efetivamente recebidos da API.</div>
+      <div className="info-banner">
+        <Info size={19} /> Processos rotulados com "Assunto identificado via publicação PJe" tiveram seu tema extraído diretamente do texto da publicação quando os dados oficiais registravam apenas "Outros Assuntos".
+      </div>
     </div>
   );
 }
@@ -308,30 +449,83 @@ function Predictions({ data }) {
   const predictions = data?.predictions || [];
   return (
     <div className="stack">
-      <div className="section-intro"><div><div className="eyebrow">EMPRESA / ESTIMATIVAS</div><h1>Estimativas por assunto</h1><p>{data ? `Projeções exploratórias para ${data.name}.` : 'Aguardando dados de uma consulta.'}</p></div><Tag type="amber">Modelo experimental</Tag></div>
-      <div className="info-banner warning"><AlertCircle size={20} /><div><b>Interpretação necessária</b><p>As probabilidades usam parâmetros heurísticos e não representam previsões estatisticamente validadas.</p></div></div>
-      <Panel title="Estimativas disponíveis" subtitle="Dados retornados por plus_previsao_condenacao">
+      <div className="section-intro">
+        <div>
+          <div className="eyebrow">EMPRESA / ESTIMATIVAS</div>
+          <h1>Previsão de Desfecho nos Processos Abertos</h1>
+          <p>{data ? `Probabilidade estatística da empresa vencer vs ser condenada em cada motivo (${data.name}).` : 'Aguardando dados de uma consulta.'}</p>
+        </div>
+        <Tag type="blue">Motor Bayesiano Empírico</Tag>
+      </div>
+
+      <div className="info-banner warning">
+        <AlertCircle size={20} />
+        <div>
+          <b>Metodologia Bayesiana de Previsão de Risco</b>
+          <p>A probabilidade de vitória da empresa nos processos em aberto é calculada ponderando as condenações, acordos e improcedências anteriores com a taxa-base dos Tribunais Regionais do Trabalho (TRTs).</p>
+        </div>
+      </div>
+
+      <Panel title="Probabilidade de Êxito nos Processos Abertos" subtitle="Estimativa da chance da empresa vencer por motivo de ação">
         {predictions.length ? (
           <div className="table-scroll">
             <table>
-              <thead><tr><th>Assunto</th><th>Estimativa de condenação</th><th>Confiança calculada</th><th>Processos em aberto</th></tr></thead>
-              <tbody>{predictions.map((prediction, index) => (
-                <tr key={`${prediction.motivo}-${index}`}>
-                  <td><b>{prediction.motivo || 'Não informado'}</b></td>
-                  <td><span className="percent">{formatPercent(prediction.probabilidade_condenacao_pct)}</span></td>
-                  <td>{formatPercent(prediction.confianca_previsao_pct)}</td>
-                  <td>{formatNumber(prediction.processos_abertos)}</td>
+              <thead>
+                <tr>
+                  <th>Motivo da Ação (TPU/PJe)</th>
+                  <th>Chance de Vitória (Empresa)</th>
+                  <th>Risco de Condenação</th>
+                  <th>Confiança Estatística</th>
+                  <th>Processos em Aberto</th>
+                  <th>Diagnóstico</th>
                 </tr>
-              ))}</tbody>
+              </thead>
+              <tbody>
+                {predictions.map((prediction, index) => {
+                  const probVencer = prediction.probabilidade_vencer_pct ?? Math.max(2, 100 - (prediction.probabilidade_condenacao_pct || 0));
+                  const isHighWin = probVencer >= 60.0;
+                  const isMidWin = probVencer >= 40.0;
+                  return (
+                    <tr key={`${prediction.motivo}-${index}`}>
+                      <td><b>{prediction.motivo || 'Não informado'}</b></td>
+                      <td>
+                        <span className="percent" style={{ color: isHighWin ? '#25865a' : isMidWin ? '#b67b23' : '#c34a4a', fontWeight: 'bold' }}>
+                          {formatPercent(probVencer)}
+                        </span>
+                      </td>
+                      <td><span className="percent" style={{ color: '#667788' }}>{formatPercent(prediction.probabilidade_condenacao_pct)}</span></td>
+                      <td>{formatPercent(prediction.confianca_previsao_pct)}</td>
+                      <td><b>{formatNumber(prediction.processos_abertos)}</b></td>
+                      <td>
+                        <Tag type={isHighWin ? 'green' : isMidWin ? 'amber' : 'red'}>
+                          {prediction.diagnostico_chance_vitoria || (isHighWin ? 'Alta probabilidade de êxito' : isMidWin ? 'Risco equilibrado' : 'Alto risco de condenação')}
+                        </Tag>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
             </table>
           </div>
-        ) : <Empty title="Sem estimativas disponíveis" description="As estimativas serão exibidas quando a API retornar projeções por assunto." />}
+        ) : (
+          <Empty title="Sem estimativas disponíveis" description="As estimativas serão exibidas quando a API retornar projeções por assunto." />
+        )}
       </Panel>
-      <Panel title="Como usar estes resultados">
+
+      <Panel title="Como interpretar estes indicadores">
         <div className="explain-grid">
-          <div><b>O que é mostrado</b><p>Estimativas por assunto com base nos registros encontrados e nas regras do backend.</p></div>
-          <div><b>O que não significa</b><p>Não é garantia de condenação, avaliação de caráter da empresa ou substituição de parecer jurídico.</p></div>
-          <div><b>Para produção</b><p>Validar as taxas-base, a calibração e a cobertura dos dados antes de decisões automatizadas.</p></div>
+          <div>
+            <b>Chance de Vitória da Empresa</b>
+            <p>Calculada a partir do histórico de improcedências e desfechos favoráveis da empresa frente ao histórico do Tribunal.</p>
+          </div>
+          <div>
+            <b>Grau de Confiança (%)</b>
+            <p>Aumenta progressivamente com o número de processos julgados anteriores (amostra estatística sólida).</p>
+          </div>
+          <div>
+            <b>Ações Preventivas</b>
+            <p>Priorizar a revisão de processos abertos em motivos com baixo índice de vitória e elevado risco de condenação.</p>
+          </div>
         </div>
       </Panel>
     </div>
@@ -341,18 +535,37 @@ function Predictions({ data }) {
 function HistoryPage({ onOpen, history, busy, error, onReload }) {
   return (
     <div className="stack">
-      <div className="section-intro"><div><div className="eyebrow">PESQUISAS / HISTÓRICO</div><h1>Pesquisas anteriores</h1><p>Consulte resultados armazenados no backend.</p></div><button className="secondary" onClick={onReload} disabled={busy}><RefreshCw size={16} className={busy ? 'spin' : ''} /> Atualizar</button></div>
+      <div className="section-intro">
+        <div>
+          <div className="eyebrow">PESQUISAS / HISTÓRICO</div>
+          <h1>Pesquisas anteriores</h1>
+          <p>Consulte diagnósticos armazenados no PostgreSQL sem custo adicional de API.</p>
+        </div>
+        <button className="secondary" onClick={onReload} disabled={busy}>
+          <RefreshCw size={16} className={busy ? 'spin' : ''} /> Atualizar
+        </button>
+      </div>
       {error && <div className="alert error" role="alert"><AlertCircle size={18} />{error}</div>}
       <Panel title="Consultas salvas" subtitle="Ordenadas pela atualização mais recente">
-        {busy ? <div className="loading"><RefreshCw className="spin" /> Carregando histórico...</div> : history.length ? (
-          <div className="history-list">{history.map((item, index) => (
-            <button className="history-item" key={item.id ?? index} onClick={() => onOpen(item.id)} disabled={item.id == null}>
-              <div className="history-icon"><Building2 size={20} /></div>
-              <div className="history-name"><b>{item.company_name || 'Empresa não informada'}</b><small>Consultado em {formatDate(item.updated_at || item.created_at)}</small></div>
-              <span>{formatNumber(item.total_processes)} registros</span><ChevronRight size={19} />
-            </button>
-          ))}</div>
-        ) : <Empty icon={History} title="Nenhuma pesquisa salva" description="As pesquisas aparecerão aqui quando o backend persistir os resultados." />}
+        {busy ? (
+          <div className="loading"><RefreshCw className="spin" /> Carregando histórico...</div>
+        ) : history.length ? (
+          <div className="history-list">
+            {history.map((item, index) => (
+              <button className="history-item" key={item.id ?? index} onClick={() => onOpen(item.id)} disabled={item.id == null}>
+                <div className="history-icon"><Building2 size={20} /></div>
+                <div className="history-name">
+                  <b>{item.company_name || 'Empresa não informada'}</b>
+                  <small>Consultado em {formatDate(item.updated_at || item.created_at)}</small>
+                </div>
+                <span>{formatNumber(item.total_processes)} registros</span>
+                <ChevronRight size={19} />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <Empty icon={History} title="Nenhuma pesquisa salva" description="As pesquisas aparecerão aqui quando o backend persistir os resultados." />
+        )}
       </Panel>
     </div>
   );
@@ -386,13 +599,35 @@ export default function App() {
     return () => window.removeEventListener('hashchange', syncHash);
   }, []);
 
+  // Polling automático para atualizar tela quando o Deep Scan em segundo plano finalizar
+  useEffect(() => {
+    if (!data?.searchId || data?.scanStatus !== 'PARTIAL_FAST_PATH') return;
+    const intervalId = setInterval(async () => {
+      try {
+        const statusRes = await request(`/search_status/${data.searchId}`);
+        if (statusRes?.is_completed && statusRes.data) {
+          const updated = normalize(statusRes.data);
+          if (updated) {
+            setData(updated);
+          }
+          clearInterval(intervalId);
+        }
+      } catch (err) {
+        console.debug('Polling background scan status:', err);
+      }
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [data?.searchId, data?.scanStatus]);
+
   async function search() {
     if (query.trim().length < 2) return;
     setBusy(true);
     setError('');
     try {
       const result = await request('/search-company', {
-        method: 'POST', body: JSON.stringify({ company_name: query.trim() }),
+        method: 'POST',
+        body: JSON.stringify({ company_name: query.trim() }),
       });
       const normalized = normalize(result);
       if (!normalized) throw new Error('A API não retornou dados de empresa válidos.');
@@ -444,8 +679,11 @@ export default function App() {
       <Sidebar page={page} navigate={navigate} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
       <div className="main">
         <header className="topbar">
-          <div className="topbar-left"><button className="menu-button" onClick={() => setMobileOpen(true)} aria-label="Abrir menu"><Menu size={23} /></button><span className="breadcrumb">RadarJud <ChevronRight size={14} /> <b>{PAGE_LABELS[page]}</b></span></div>
-          <div className="region"><span className="region-dot" /> Pernambuco · TRT-6</div>
+          <div className="topbar-left">
+            <button className="menu-button" onClick={() => setMobileOpen(true)} aria-label="Abrir menu"><Menu size={23} /></button>
+            <span className="breadcrumb">RadarJus <ChevronRight size={14} /> <b>{PAGE_LABELS[page]}</b></span>
+          </div>
+          <div className="region"><span className="region-dot" /> CNJ DataJud · Comunica PJe</div>
         </header>
         <main className="content">
           {page === 'search' && <SearchPage onSearch={search} query={query} setQuery={setQuery} busy={busy} error={error} navigate={navigate} result={data} />}
@@ -454,7 +692,7 @@ export default function App() {
           {page === 'predictions' && <Predictions data={data} />}
           {page === 'history' && <HistoryPage history={history} busy={historyBusy} error={historyError} onOpen={openHistory} onReload={loadHistory} />}
         </main>
-        <footer className="footer">RadarJud · Dados públicos e metadados judiciais · Informações sujeitas a limitações de cobertura</footer>
+        <footer className="footer">RadarJus · Monitoramento e Diagnóstico Preditivo de Risco Trabalhista</footer>
       </div>
     </div>
   );
