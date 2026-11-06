@@ -1,4 +1,4 @@
-# LexGuard AI: Orquestrador de Risco de Terceiros via Metadados DataJud e Comunica PJe
+# RadarJus: Orquestrador de Risco de Terceiros via Metadados DataJud e Comunica PJe
 
 Diagnóstico Automatizado de Passivo Trabalhista/Cível, Ranking de Motivos, Análise de Sentenças e Predição Bayesiana de Condenação com base em Dados Abertos Oficiais do Judiciário (CNJ).
 
@@ -6,7 +6,7 @@ Diagnóstico Automatizado de Passivo Trabalhista/Cível, Ranking de Motivos, An�
 
 ## 🏛️ 1. Visão Geral da Solução
 
-O **LexGuard AI** contorna a restrição de sigilo e a ausência gratuita da Petição Inicial em PDF nas APIs públicas extraindo inteligência jurídica a partir da combinação de duas APIs abertas oficiais do Poder Judiciário:
+O **RadarJus** contorna a restrição de sigilo e a ausência gratuita da Petição Inicial em PDF nas APIs públicas extraindo inteligência jurídica a partir da combinação de duas APIs abertas oficiais do Poder Judiciário:
 
 1. **API Comunica PJe (Diário de Justiça Eletrônico / Intimações)**:
    - Descoberta inicial dos números de processos vinculados à empresa (`nomeParte`) e extração do texto dispositivo de sentenças, homologações e despachos.

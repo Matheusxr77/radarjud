@@ -1,0 +1,1786 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>
+      RadarJus — Inteligência preditiva para governança de terceiros
+    </title>
+    <style>
+      :root {
+        --navy: #152638;
+        --navy-light: #1e354d;
+        --blue: #286084;
+        --blue2: #39789e;
+        --paper: #f7f5f2;
+        --white: #ffffff;
+        --ink: #1b2a3a;
+        --muted: #5a6b7e;
+        --line: #dce2e7;
+        --sand: #eee5de;
+        --copper: #8a6049;
+        --copper-light: #c5a48e;
+        --green: #23875d;
+        --green-bg: #e1f2e9;
+        --amber: #bf7c20;
+        --red: #c84b4b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: var(--navy);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+      }
+      /* 16:9 Large TV Optimized Deck */
+      .deck {
+        width: 100vw;
+        height: 100vh;
+        position: relative;
+        background: var(--paper);
+        overflow: hidden;
+      }
+      .slide {
+        position: absolute;
+        inset: 0;
+        padding: 4.5vh 5.5vw 6.8vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        opacity: 0;
+        visibility: hidden;
+        transform: translateX(36px) scale(0.99);
+        transition:
+          opacity 0.45s ease,
+          transform 0.55s cubic-bezier(0.2, 0.75, 0.25, 1),
+          visibility 0.45s;
+        overflow: hidden;
+      }
+      .slide.active {
+        opacity: 1;
+        visibility: visible;
+        transform: translateX(0) scale(1);
+      }
+      .slide.dark {
+        background: radial-gradient(
+          circle at 85% 20%,
+          #213c56 0%,
+          var(--navy) 65%
+        );
+        color: #fff;
+      }
+      .slide-body {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: 0;
+      }
+      .eyebrow {
+        font-size: clamp(14px, 1.15vw, 28px);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-weight: 800;
+        color: var(--blue);
+        margin-bottom: 1.4vh;
+      }
+      .dark .eyebrow {
+        color: var(--copper-light);
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+      h1 {
+        font-size: clamp(48px, 5.4vw, 130px);
+        line-height: 0.98;
+        letter-spacing: -0.05em;
+        margin-bottom: 2vh;
+        font-weight: 800;
+      }
+      .cover-title {
+        font-size: clamp(64px, 7.8vw, 180px);
+        line-height: 0.94;
+        letter-spacing: -0.055em;
+        margin-bottom: 1.8vh;
+        font-weight: 850;
+      }
+      .cover-subtitle {
+        font-size: clamp(26px, 2.8vw, 68px);
+        line-height: 1.18;
+        letter-spacing: -0.03em;
+        font-weight: 600;
+        color: #e4ecf2;
+        max-width: 78vw;
+        margin-bottom: 3.5vh;
+      }
+      h2 {
+        font-size: clamp(34px, 3.6vw, 86px);
+        line-height: 1.05;
+        letter-spacing: -0.04em;
+        margin-bottom: 1.6vh;
+        font-weight: 800;
+      }
+      h3 {
+        font-size: clamp(20px, 1.6vw, 38px);
+        margin-bottom: 0.8vh;
+        font-weight: 750;
+      }
+      p {
+        font-size: clamp(18px, 1.45vw, 34px);
+        line-height: 1.45;
+        color: var(--muted);
+        margin-bottom: 0;
+      }
+      .dark p {
+        color: #c9d5e0;
+      }
+      .accent {
+        color: var(--blue);
+      }
+      .dark .accent {
+        color: #dfbe9f;
+      }
+      .small {
+        font-size: clamp(14px, 1.05vw, 25px) !important;
+        line-height: 1.4;
+        color: var(--muted) !important;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.8vw;
+        font-size: clamp(22px, 1.6vw, 40px);
+        font-weight: 850;
+        letter-spacing: -0.03em;
+      }
+      .brand .mark {
+        font-size: clamp(28px, 2.2vw, 54px);
+        color: var(--copper-light);
+      }
+      .topline {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5vh;
+        flex-shrink: 0;
+      }
+      .tag {
+        border-radius: 99px;
+        background: var(--sand);
+        color: #76533f;
+        padding: 0.9vh 1.4vw;
+        font-size: clamp(13px, 0.95vw, 23px);
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .dark .tag {
+        background: #2b4053;
+        color: #e4c7b0;
+      }
+      .rule {
+        height: 2px;
+        background: var(--line);
+        margin: 2.2vh 0;
+      }
+      .dark .rule {
+        background: #ffffff24;
+      }
+      .grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2vw;
+      }
+      .grid3 {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1.6vw;
+      }
+      .card {
+        background: var(--white);
+        border-radius: 1.2vw;
+        padding: 2.2vh 2vw;
+        box-shadow: 0 10px 32px #1b2a3a0a;
+      }
+      .card.sand {
+        background: var(--sand);
+      }
+      .card.blue {
+        background: #e7f0f5;
+      }
+      .kpi {
+        font-size: clamp(36px, 3.8vw, 90px);
+        font-weight: 850;
+        letter-spacing: -0.05em;
+        color: var(--blue);
+        line-height: 1;
+      }
+      .kpi-label {
+        font-size: clamp(13px, 1vw, 24px);
+        color: var(--muted);
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        margin-bottom: 1vh;
+      }
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1vw;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.6vw;
+        border-radius: 0.7vw;
+        padding: 1vh 1.3vw;
+        background: #e7f0f5;
+        color: var(--blue);
+        font-size: clamp(14px, 1.05vw, 26px);
+        font-weight: 750;
+      }
+      .dark .pill {
+        background: #23384c;
+        color: #dfbe9f;
+        border: 1px solid #355069;
+      }
+
+      /* Team Slide Styles (TV-Ready 5-Column Template) */
+      .team-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 1.6vw;
+        margin-top: 3.5vh;
+        align-items: stretch;
+      }
+      .team-card {
+        background: var(--white);
+        border: 1px solid var(--line);
+        border-radius: 1.4vw;
+        padding: 3.8vh 1.2vw 3.2vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        text-align: center;
+        box-shadow: 0 16px 40px #1b2a3a0d;
+        position: relative;
+        overflow: hidden;
+      }
+      .team-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 0.6vh;
+        background: linear-gradient(90deg, var(--blue), var(--copper));
+      }
+      .team-avatar {
+        width: clamp(120px, 10.8vw, 240px);
+        height: clamp(120px, 10.8vw, 240px);
+        border-radius: 50%;
+        background: linear-gradient(135deg, #e7f0f5 0%, var(--sand) 100%);
+        padding: 0.35vw;
+        border: 3px solid var(--copper-light);
+        box-shadow:
+          0 14px 32px #15263822,
+          0 0 0 6px #e7f0f5;
+        display: grid;
+        place-items: center;
+        font-size: clamp(34px, 3vw, 72px);
+        font-weight: 850;
+        color: var(--blue);
+        margin-bottom: 2.4vh;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+      .team-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 50%;
+        display: block;
+      }
+      .team-name {
+        font-size: clamp(18px, 1.4vw, 34px);
+        font-weight: 850;
+        color: var(--ink);
+        margin-bottom: 1.6vh;
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+      }
+      .team-role {
+        margin-top: auto;
+        width: 100%;
+        min-height: 5.4vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--sand);
+        color: #76533f;
+        font-size: clamp(11px, 0.8vw, 19px);
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        line-height: 1.3;
+        padding: 0.9vh 0.8vw;
+        border-radius: 0.7vw;
+        overflow-wrap: break-word;
+        text-wrap: balance;
+      }
+
+      /* Case Study Slide Styles (High-Visibility Large TV) */
+      .case-context {
+        background: var(--navy);
+        color: #fff;
+        border-radius: 1.1vw;
+        padding: 1.8vh 2vw;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1.4vw;
+        align-items: center;
+        box-shadow: 0 12px 32px #15263818;
+        margin-bottom: 2.2vh;
+      }
+      .case-stat {
+        background: #21384f;
+        border: 1px solid #33506b;
+        border-radius: 0.8vw;
+        padding: 1.3vh 1.2vw;
+        text-align: center;
+      }
+      .case-stat small {
+        display: block;
+        font-size: clamp(11px, 0.8vw, 18px);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #9fb2c4;
+        font-weight: 800;
+        margin-bottom: 0.4vh;
+      }
+      .case-stat strong {
+        font-size: clamp(18px, 1.45vw, 34px);
+        color: #fff;
+        font-weight: 850;
+      }
+      .case-stat.highlight strong {
+        color: #dfbe9f;
+      }
+      .case-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1.4vw;
+        align-items: stretch;
+      }
+      .case-card {
+        background: var(--white);
+        border: 1px solid var(--line);
+        border-radius: 1.1vw;
+        padding: 1.8vh 1.3vw;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        box-shadow: 0 12px 30px #1b2a3a0a;
+        position: relative;
+        overflow: hidden;
+      }
+      .case-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 0.65vh;
+        background: var(--blue);
+      }
+      .case-card.step-warn::before {
+        background: var(--amber);
+      }
+      .case-card.step-danger::before {
+        background: var(--red);
+      }
+      .case-card.step-final {
+        background: linear-gradient(180deg, #fff5f5 0%, #fde6e6 100%);
+        border: 2px solid #e89e9e;
+      }
+      .case-card.step-final::before {
+        background: #9e2222;
+      }
+      .case-step-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1.2vh;
+      }
+      .case-step-num {
+        width: clamp(36px, 2.7vw, 62px);
+        height: clamp(36px, 2.7vw, 62px);
+        border-radius: 0.7vw;
+        background: #e7f0f5;
+        color: var(--blue);
+        font-size: clamp(16px, 1.2vw, 28px);
+        font-weight: 900;
+        display: grid;
+        place-items: center;
+      }
+      .case-card.step-warn .case-step-num {
+        background: #fdf2e1;
+        color: var(--amber);
+      }
+      .case-card.step-danger .case-step-num {
+        background: #fbe8e8;
+        color: var(--red);
+      }
+      .case-card.step-final .case-step-num {
+        background: #c84b4b;
+        color: #fff;
+      }
+      .case-chip {
+        font-size: clamp(11px, 0.8vw, 18px);
+        font-weight: 850;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        padding: 0.55vh 0.85vw;
+        border-radius: 99px;
+        background: #edf2f6;
+        color: var(--muted);
+      }
+      .case-card.step-warn .case-chip {
+        background: #fdf2e1;
+        color: #9e6211;
+      }
+      .case-card.step-danger .case-chip {
+        background: #fbe8e8;
+        color: #b53838;
+      }
+      .case-card.step-final .case-chip {
+        background: #f5cdcd;
+        color: #8f1d1d;
+      }
+      .case-card h3 {
+        font-size: clamp(20px, 1.55vw, 36px);
+        line-height: 1.15;
+        color: var(--ink);
+        margin-bottom: 1.2vh;
+        font-weight: 850;
+        letter-spacing: -0.02em;
+      }
+      .case-hero-metric {
+        background: #f3f6f9;
+        border-radius: 0.8vw;
+        padding: 1.4vh 1vw;
+        text-align: center;
+        margin-bottom: 1.4vh;
+        border: 1px solid #e2e8ee;
+      }
+      .case-card.step-warn .case-hero-metric {
+        background: #fef8ef;
+        border-color: #f5e0c0;
+      }
+      .case-card.step-danger .case-hero-metric {
+        background: #fdf2f2;
+        border-color: #f3caca;
+      }
+      .case-card.step-final .case-hero-metric {
+        background: #c84b4b;
+        border-color: #b03838;
+        color: #fff;
+      }
+      .case-hero-metric strong {
+        display: block;
+        font-size: clamp(22px, 1.85vw, 44px);
+        font-weight: 900;
+        letter-spacing: -0.04em;
+        color: var(--blue);
+        line-height: 1.05;
+      }
+      .case-card.step-warn .case-hero-metric strong {
+        color: var(--amber);
+      }
+      .case-card.step-danger .case-hero-metric strong {
+        color: var(--red);
+      }
+      .case-card.step-final .case-hero-metric strong {
+        color: #fff;
+        font-size: clamp(24px, 2.05vw, 48px);
+      }
+      .case-hero-metric small {
+        display: block;
+        font-size: clamp(11px, 0.8vw, 18px);
+        font-weight: 750;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin-top: 0.4vh;
+      }
+      .case-card.step-final .case-hero-metric small {
+        color: #ffe2e2;
+      }
+      .case-points {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.9vh;
+      }
+      .case-points li {
+        font-size: clamp(15px, 1.15vw, 26px);
+        line-height: 1.3;
+        color: #3b4d61;
+        font-weight: 600;
+        padding-left: 1.2vw;
+        position: relative;
+      }
+      .case-points li::before {
+        content: "•";
+        position: absolute;
+        left: 0;
+        color: var(--copper);
+        font-weight: 900;
+      }
+      .case-card.step-final .case-points li::before {
+        color: var(--red);
+      }
+
+      /* Scenario 2 (With RadarJus) + High-Impact Numbers Table */
+      .case2-kpis {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1.3vw;
+        margin-bottom: 1.8vh;
+      }
+      .case2-kpi {
+        background: var(--white);
+        border: 1px solid var(--line);
+        border-top: 0.55vh solid var(--blue);
+        border-radius: 1vw;
+        padding: 1.5vh 1.3vw;
+        text-align: center;
+        box-shadow: 0 8px 22px #1b2a3a08;
+      }
+      .case2-kpi.warn {
+        border-top-color: var(--red);
+      }
+      .case2-kpi.good {
+        background: linear-gradient(180deg, #f2faf6 0%, #e1f2e9 100%);
+        border-color: #b5dfca;
+        border-top: 0.55vh solid var(--green);
+      }
+      .case2-kpi strong {
+        display: block;
+        font-size: clamp(24px, 2.1vw, 50px);
+        font-weight: 900;
+        letter-spacing: -0.04em;
+        color: var(--blue);
+        line-height: 1.05;
+      }
+      .case2-kpi.warn strong {
+        color: var(--red);
+      }
+      .case2-kpi.good strong {
+        color: var(--green);
+      }
+      .case2-kpi small {
+        display: block;
+        font-size: clamp(11px, 0.82vw, 19px);
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin-top: 0.4vh;
+      }
+      .case2-kpi.good small {
+        color: #1b6b48;
+      }
+      .comp-table-wrap {
+        background: var(--navy);
+        border-radius: 1.1vw;
+        overflow: hidden;
+        box-shadow: 0 16px 40px #15263826;
+        border: 1px solid #29425c;
+      }
+      .comp-table {
+        width: 100%;
+        border-collapse: collapse;
+        color: #e8eef4;
+      }
+      .comp-table th,
+      .comp-table td {
+        padding: 1.15vh 1.6vw;
+        text-align: left;
+        border-bottom: 1px solid #233a52;
+        vertical-align: middle;
+      }
+      .comp-table tr:last-child td {
+        border-bottom: none;
+      }
+      .comp-table thead th {
+        background: #0f1c2b;
+        color: #9fb2c4;
+        font-size: clamp(12px, 0.9vw, 21px);
+        font-weight: 850;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding: 1.3vh 1.6vw;
+      }
+      .comp-table thead th:nth-child(3) {
+        color: #6ee7b7;
+        background: #112826;
+      }
+      .comp-table td:first-child {
+        font-size: clamp(14px, 1.08vw, 25px);
+        font-weight: 800;
+        color: #ffffff;
+        width: 30%;
+      }
+      .comp-table td:nth-child(2) {
+        color: #c2cedb;
+        width: 35%;
+      }
+      .comp-table td:nth-child(3) {
+        background: #142e2d;
+        color: #ecfdf5;
+        width: 35%;
+        border-left: 2px solid #23534c;
+      }
+      .comp-table .num-bad {
+        font-size: clamp(18px, 1.5vw, 35px);
+        color: #fca5a5;
+        font-weight: 900;
+        letter-spacing: -0.03em;
+        margin-right: 0.6vw;
+      }
+      .comp-table .num-good {
+        font-size: clamp(20px, 1.65vw, 38px);
+        color: #6ee7b7;
+        font-weight: 900;
+        letter-spacing: -0.03em;
+        margin-right: 0.6vw;
+      }
+      .comp-table .tag-note {
+        display: inline-block;
+        font-size: clamp(11px, 0.8vw, 18px);
+        font-weight: 700;
+        padding: 0.3vh 0.65vw;
+        border-radius: 99px;
+        background: #21374d;
+        color: #a8bacb;
+        vertical-align: middle;
+      }
+      .comp-table td:nth-child(3) .tag-note {
+        background: #1e4642;
+        color: #a7f3d0;
+      }
+      .comp-table tr.highlight-row td {
+        background: #192f45;
+      }
+      .comp-table tr.highlight-row td:nth-child(3) {
+        background: #173f3a;
+      }
+      .comp-table tr.highlight-row .num-good {
+        font-size: clamp(22px, 1.85vw, 44px);
+        color: #34d399;
+      }
+
+      /* Solution Hero Flow Bar (Slide 3) */
+      .sol-flow-bar {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
+        align-items: center;
+        gap: 1.2vw;
+        background: radial-gradient(circle at 85% 20%, #213c56 0%, var(--navy) 70%);
+        color: #fff;
+        padding: 5.5vh 2.8vw;
+        border-radius: 1.5vw;
+        margin-top: 4.5vh;
+        box-shadow: 0 22px 50px #15263826;
+        border: 1px solid #2b4560;
+      }
+      .sol-flow-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        gap: 1.6vh;
+      }
+      .sol-flow-item span.badge-dot {
+        width: clamp(54px, 4.4vw, 96px);
+        height: clamp(54px, 4.4vw, 96px);
+        border-radius: 50%;
+        background: var(--blue);
+        border: 3px solid #4d8ab3;
+        box-shadow: 0 8px 24px #0d1a2766;
+        color: #fff;
+        display: grid;
+        place-items: center;
+        font-size: clamp(22px, 1.8vw, 42px);
+        font-weight: 900;
+      }
+      .sol-flow-item.final span.badge-dot {
+        background: var(--green);
+        border-color: #55b98b;
+      }
+      .sol-flow-item strong {
+        display: block;
+        font-size: clamp(19px, 1.55vw, 36px);
+        font-weight: 850;
+        color: #ffffff;
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+      }
+      .sol-flow-item small {
+        display: block;
+        font-size: clamp(13px, 1vw, 23px);
+        color: #b5c6d6;
+        font-weight: 600;
+        line-height: 1.3;
+        margin-top: 0.5vh;
+      }
+      .sol-flow-arrow {
+        color: var(--copper-light);
+        font-size: clamp(28px, 2.5vw, 58px);
+        font-weight: 900;
+        line-height: 1;
+      }
+
+      /* Architecture Topology Diagram */
+      .arch-diagram-wrap {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 0;
+        width: 100%;
+        margin-top: 1vh;
+      }
+      .arch-diagram-svg {
+        width: 100%;
+        height: 100%;
+        max-height: 64vh;
+        overflow: visible;
+      }
+      .ask {
+        font-size: clamp(22px, 2vw, 48px);
+        line-height: 1.3;
+        max-width: 78vw;
+        letter-spacing: -0.025em;
+        font-weight: 600;
+      }
+
+      /* Footer & TV Navigation */
+      .footer {
+        position: absolute;
+        bottom: 2.2vh;
+        left: 5.5vw;
+        right: 16vw;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: clamp(12px, 0.9vw, 21px);
+        font-weight: 700;
+        color: #7b8896;
+        letter-spacing: 0.05em;
+        pointer-events: none;
+      }
+      .dark .footer {
+        color: #8fa0af;
+      }
+      .progress {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        height: 0.6vh;
+        background: var(--copper-light);
+        width: 0;
+        transition: width 0.35s;
+      }
+      .controls {
+        position: absolute;
+        right: 2.5vw;
+        bottom: 1.8vh;
+        display: flex;
+        align-items: center;
+        gap: 0.6vw;
+        z-index: 20;
+      }
+      .controls button {
+        border: 1px solid #cbd3da;
+        background: #fff;
+        color: var(--navy);
+        border-radius: 50%;
+        width: clamp(36px, 2.6vw, 62px);
+        height: clamp(36px, 2.6vw, 62px);
+        font-size: clamp(18px, 1.4vw, 32px);
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+        transition: all 0.2s ease;
+      }
+      .controls button:hover {
+        background: var(--blue);
+        color: #fff;
+        border-color: var(--blue);
+      }
+      .counter {
+        font-size: clamp(13px, 0.95vw, 22px);
+        font-weight: 800;
+        color: #8995a1;
+        margin-right: 0.6vw;
+        letter-spacing: 0.05em;
+      }
+
+      @media (max-width: 1024px) {
+        .team-grid {
+          grid-template-columns: repeat(3, 1fr);
+        }
+        .case-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .case-context {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 768px) {
+        .slide {
+          padding: 4vh 5vw 8vh;
+        }
+        .grid2,
+        .grid3,
+        .case-grid,
+        .team-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *:before,
+        *:after {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="deck" id="deck">
+      <!-- SLIDE 1: CAPA / TÍTULO DO PROJETO -->
+      <section class="slide dark active" data-time="Capa">
+        <div class="topline">
+          <div class="brand"><span class="mark">⚖</span> RadarJus</div>
+          <span class="tag">Hack Garanhuns Tech · 2026</span>
+        </div>
+        <div class="slide-body">
+          <div class="eyebrow">Jurimetria · Compliance · Governança B2B</div>
+          <h1 class="cover-title">RadarJus</h1>
+          <div class="cover-subtitle">
+            Inteligência preditiva para governança de terceiros
+          </div>
+          <div class="rule" style="max-width: 48vw"></div>
+        </div>
+        <div class="footer">
+          <span
+            >RADARJUS — INTELIGÊNCIA PREDITIVA PARA GOVERNANÇA DE
+            TERCEIROS</span
+          >
+        </div>
+      </section>
+
+      <!-- SLIDE 2: PROBLEMA -->
+      <section class="slide dark" ">
+        <div class="topline">
+          <div class="brand"><span class="mark">⚖</span> RadarJus</div>
+          <span class="tag">Hack Garanhuns Tech · 2026</span>
+        </div>
+        <div class="slide-body">
+          <div class="eyebrow">O risco invisível da terceirização</div>
+          <h1>
+            Quando o fornecedor<br />não paga,
+            <span class="accent">a conta chega.</span>
+          </h1>
+          <p style="max-width: 66vw">
+            Pela Súmula 331 do TST, a contratante pode responder
+            subsidiariamente por dívidas trabalhistas da empresa terceirizada.
+          </p>
+          <div class="rule" style="max-width: 55vw"></div>
+          <p style="max-width: 66vw">
+            Certidões tradicionais não mostram todo o histórico. A busca manual
+            é lenta e provedores jurídicos podem custar caro.
+          </p>
+        </div>
+        <div class="footer">
+          <span>RADARJUS · PITCH DE 3 MINUTOS</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 3: SOLUÇÃO E DIFERENCIAL -->
+      <section class="slide">
+        <div class="topline">
+          <div class="brand">
+            <span class="mark" style="color: var(--copper)">⚖</span> RadarJus
+          </div>
+          <span class="tag">Solução e diferencial</span>
+        </div>
+        <div class="slide-body">
+          <div class="eyebrow">Inteligência preditiva para gestão de terceiros</div>
+          <h2 style="margin-bottom: 1vh">
+            Um radar preditivo para <span class="accent">antecipar o passivo.</span>
+          </h2>
+          <p style="max-width: 78vw">
+            Transformamos dados processuais públicos em um <b>raio-x trabalhista</b> da terceirizada para apoiar o Compliance antes da contratação.
+          </p>
+
+          <!-- Barra Visual de Fluxo do Produto (Ampliada) -->
+          <div class="sol-flow-bar">
+            <div class="sol-flow-item">
+              <span class="badge-dot">1</span>
+              <div>
+                <strong>Busca por Nome / CNPJ</strong>
+                <small>Empresa terceirizada</small>
+              </div>
+            </div>
+            <div class="sol-flow-arrow">→</div>
+            <div class="sol-flow-item">
+              <span class="badge-dot">2</span>
+              <div>
+                <strong>Varredura PJe + DataJud</strong>
+                <small>Ativos e histórico além da CNDT</small>
+              </div>
+            </div>
+            <div class="sol-flow-arrow">→</div>
+            <div class="sol-flow-item">
+              <span class="badge-dot">3</span>
+              <div>
+                <strong>Análise de Padrões</strong>
+                <small>Assuntos, desfechos e Bayes</small>
+              </div>
+            </div>
+            <div class="sol-flow-arrow">→</div>
+            <div class="sol-flow-item final">
+              <span class="badge-dot">4</span>
+              <div>
+                <strong>Homologação Segura</strong>
+                <small>Decisão antes do contrato</small>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>RADARJUS · DADOS PÚBLICOS + MOTOR ESTATÍSTICO BAYESIANO</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 4: ESTUDO DE CASO (SEM O RADARJUS) -->
+      <section class="slide" data-time="1:00–1:35">
+        <div class="topline">
+          <div class="brand">
+            <span class="mark" style="color: var(--copper)">⚖</span> RadarJus
+          </div>
+          <span class="tag" style="background: #fbe8e8; color: #b53838">
+            Estudo de caso · ❌ Sem o RadarJus
+          </span>
+        </div>
+        <div class="slide-body">
+          <div class="eyebrow" style="color: var(--red)">
+            Cenário 1 · O peso do PDF + OCR leva à aprovação às cegas
+          </div>
+          <h2 style="margin-bottom: 1.6vh; font-size: clamp(26px, 2.7vw, 64px)">
+            Construtora Horizonte × Alvorada Comércio Ltda. 
+          </h2>
+
+          <!-- Números da Abordagem Tradicional (Da Tabela) -->
+          <div class="case-context">
+            <div class="case-stat">
+              <small>Aquisição (Mistral OCR)</small>
+              <strong style="color: #fca5a5">US$ 500,00 <span style="font-size: 0.65em; opacity: 0.8">(200k págs)</span></strong>
+            </div>
+            <div class="case-stat">
+              <small>Input + Output PDF</small>
+              <strong style="color: #fca5a5">US$ 47,50 <span style="font-size: 0.65em; opacity: 0.8">(165M tokens)</span></strong>
+            </div>
+            <div class="case-stat highlight">
+              <small>Custo Mensal Tradicional</small>
+              <strong style="color: #fca5a5">US$ 547,50 / mês</strong>
+            </div>
+            <div class="case-stat highlight">
+              <small>Tempo por Consulta</small>
+              <strong style="color: #fca5a5">30s a 2 min <span style="font-size: 0.65em; opacity: 0.8">(Lento)</span></strong>
+            </div>
+          </div>
+
+          <!-- 4 Etapas Visuais do Pior Cenário -->
+          <div class="case-grid">
+            <!-- Etapa 1 -->
+            <div class="case-card">
+              <div>
+                <div class="case-step-top">
+                  <div class="case-step-num">1</div>
+                  <span class="case-chip">Falso Positivo</span>
+                </div>
+                <h3>Ilusão da CNDT</h3>
+                <div class="case-hero-metric">
+                  <strong>CNDT "Limpa"</strong>
+                  <small>0 Dívidas em Execução</small>
+                </div>
+              </div>
+              <ul class="case-points">
+                <li>Oculta <b>24 processos ativos</b> da Alvorada</li>
+                <li>Não mostra ações <b>em andamento</b></li>
+              </ul>
+            </div>
+
+            <!-- Etapa 2 -->
+            <div class="case-card step-warn">
+              <div>
+                <div class="case-step-top">
+                  <div class="case-step-num">2</div>
+                  <span class="case-chip">PDF Bruto + OCR</span>
+                </div>
+                <h3>Barreira de Custo</h3>
+                <div class="case-hero-metric">
+                  <strong>US$ 547,50/mês</strong>
+                  <small>160M Tokens + Fila OCR</small>
+                </div>
+              </div>
+              <ul class="case-points">
+                <li><b>US$ 500</b> só em OCR (PDFs de 40 págs)</li>
+                <li>Pelo prazo da obra, <b>aprova às cegas</b></li>
+              </ul>
+            </div>
+
+            <!-- Etapa 3 -->
+            <div class="case-card step-danger">
+              <div>
+                <div class="case-step-top">
+                  <div class="case-step-num">3</div>
+                  <span class="case-chip">6 Meses Depois</span>
+                </div>
+                <h3>Desastre Financeiro</h3>
+                <div class="case-hero-metric">
+                  <strong>50 Ações</strong>
+                  <small>Alvorada quebra e some</small>
+                </div>
+              </div>
+              <ul class="case-points">
+                <li>Calote em <b>rescisões, FGTS e horas extras</b></li>
+                <li>Construtora entra no <b>polo passivo</b></li>
+              </ul>
+            </div>
+
+            <!-- Etapa 4 -->
+            <div class="case-card step-final">
+              <div>
+                <div class="case-step-top">
+                  <div class="case-step-num">4</div>
+                  <span class="case-chip">Súmula 331 TST</span>
+                </div>
+                <h3>A Conta Chega</h3>
+                <div class="case-hero-metric">
+                  <strong>- R$ 350 mil</strong>
+                  <small>Bloqueio Judicial Direto</small>
+                </div>
+              </div>
+              <ul class="case-points">
+                <li><b>Responsabilidade subsidiária</b> (Item IV)</li>
+                <li>Bloqueio direto na conta da <b>Construtora</b></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>ABORDAGEM TRADICIONAL (US$ 547,50/MÊS · 160M TOKENS PDF) → APROVAÇÃO ÀS CEGAS → BLOQUEIO DE R$ 350 MIL</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 5: ESTUDO DE CASO (COM O RADARJUS + TABELA COMPARATIVA) -->
+      <section class="slide" data-time="1:35–2:10">
+        <div class="topline">
+          <div class="brand">
+            <span class="mark" style="color: var(--copper)">⚖</span> RadarJus
+          </div>
+          <span class="tag" style="background: var(--green-bg); color: var(--green)">
+            Estudo de caso · ✅ Com o RadarJus
+          </span>
+        </div>
+        <div class="slide-body">
+          <div class="eyebrow" style="color: var(--green); margin-bottom: 0.6vh">
+            Cenário 2 · Alvorada Comércio Ltda. auditada em segundos
+          </div>
+          <h2 style="margin-bottom: 1.4vh; font-size: clamp(28px, 2.9vw, 68px)">
+            Risco detectado antes da assinatura. <span class="accent" style="color: var(--green)">Passivo evitado.</span>
+          </h2>
+
+          <!-- 4 Grandes Números do Caso Alvorada -->
+          <div class="case2-kpis">
+            <div class="case2-kpi">
+              <strong>24 Processos</strong>
+              <small>Ocultos na CNDT</small>
+            </div>
+            <div class="case2-kpi warn">
+              <strong>8 Condenações</strong>
+              <small>+ 8 Ações em Aberto</small>
+            </div>
+            <div class="case2-kpi">
+              <strong>~3 Segundos</strong>
+              <small>Tempo de Consulta</small>
+            </div>
+            <div class="case2-kpi good">
+              <strong>R$ 350 mil</strong>
+              <small>Bloqueio Evitado</small>
+            </div>
+          </div>
+
+          <!-- Tabela Comparativa Focada em Números -->
+          <div class="comp-table-wrap">
+            <table class="comp-table">
+              <thead>
+                <tr>
+                  <th>Indicador</th>
+                  <th>Tradicional (PDF + OCR)</th>
+                  <th>RadarJus (JSON + Vertex AI)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Custo de Aquisição (OCR)</td>
+                  <td>
+                    <span class="num-bad">$500,00</span>
+                    <span class="tag-note">200k págs · Mistral OCR</span>
+                  </td>
+                  <td>
+                    <span class="num-good">$0,00</span>
+                    <span class="tag-note">API Pública CNJ</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>Custo de Input (Tokens)</td>
+                  <td>
+                    <span class="num-bad">$40,00</span>
+                    <span class="tag-note">160M tokens PDF</span>
+                  </td>
+                  <td>
+                    <span class="num-good">$3,75</span>
+                    <span class="tag-note">15M tokens JSON</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>Custo de Output (Tokens)</td>
+                  <td>
+                    <span class="num-bad" style="color: #e2e8f0">$7,50</span>
+                    <span class="tag-note">5M tokens · Gemini Flash-Lite</span>
+                  </td>
+                  <td>
+                    <span class="num-good" style="color: #e2e8f0">$7,50</span>
+                    <span class="tag-note">5M tokens · Gemini Flash-Lite</span>
+                  </td>
+                </tr>
+                <tr class="highlight-row">
+                  <td>Custo Mensal Total</td>
+                  <td>
+                    <span class="num-bad">$547,50</span>
+                    <span class="tag-note">/ mês</span>
+                  </td>
+                  <td>
+                    <span class="num-good">$11,25</span>
+                    <span class="tag-note">/ mês</span>
+                  </td>
+                </tr>
+                <tr class="highlight-row">
+                  <td>Redução de Custos</td>
+                  <td>
+                    <span class="tag-note">Base de Referência</span>
+                  </td>
+                  <td>
+                    <span class="num-good">97,94%</span>
+                    <span class="tag-note">Economia Direta</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>Tempo por Consulta</td>
+                  <td>
+                    <span class="num-bad">30s – 2min</span>
+                    <span class="tag-note">Download + Fila OCR</span>
+                  </td>
+                  <td>
+                    <span class="num-good">~3 seg</span>
+                    <span class="tag-note">Instantâneo</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="footer">
+          <span>CENÁRIO COM RADARJUS · 97,94% DE ECONOMIA OPERACIONAL E HOMOLOGAÇÃO EM ~3 SEGUNDOS</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 6: ARQUITETURA E ESCALA -->
+      <section class="slide" data-time="2:10–2:30">
+        <div class="topline">
+          <div class="brand">
+            <span class="mark" style="color: var(--copper)">⚖</span> RadarJus
+          </div>
+          <span class="tag">Arquitetura e escala</span>
+        </div>
+        <div class="slide-body">
+          <div class="eyebrow">Topologia do Sistema</div>
+          <h2 style="margin-bottom: 0.5vh">
+            Metadados estruturados. <span class="accent">Menos peso, mais eficiência.</span>
+          </h2>
+
+          <div class="arch-diagram-wrap">
+            <svg
+              class="arch-diagram-svg"
+              viewBox="0 0 1320 560"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <defs>
+                <marker
+                  id="arrow-blue"
+                  viewBox="0 0 10 10"
+                  refX="7"
+                  refY="5"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#286084" />
+                </marker>
+                <marker
+                  id="arrow-copper"
+                  viewBox="0 0 10 10"
+                  refX="7"
+                  refY="5"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#8a6049" />
+                </marker>
+                <marker
+                  id="arrow-green"
+                  viewBox="0 0 10 10"
+                  refX="7"
+                  refY="5"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#23875d" />
+                </marker>
+                <filter id="soft-shadow" x="-10%" y="-10%" width="120%" height="125%">
+                  <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#152638" flood-opacity="0.09" />
+                </filter>
+              </defs>
+
+              <!-- ==================== ZONA CENTRAL (TRACEJADA): BACKEND & MOTOR ==================== -->
+              <rect
+                x="410"
+                y="24"
+                width="465"
+                height="505"
+                rx="18"
+                fill="#ffffff"
+                fill-opacity="0.55"
+                stroke="#8a6049"
+                stroke-width="2"
+                stroke-dasharray="8 6"
+              />
+              <text
+                x="642"
+                y="54"
+                text-anchor="middle"
+                fill="#8a6049"
+                font-size="14"
+                font-weight="800"
+                letter-spacing="2"
+              >
+                CORE RADARJUS · BACKEND
+              </text>
+
+              <!-- ==================== CONEXÕES ORTOGONAIS ==================== -->
+              <!-- Workstation (Interface Web) -> Barramento Interno -->
+              <path
+                d="M 225 155 L 335 155"
+                stroke="#286084"
+                stroke-width="3.5"
+                marker-end="url(#arrow-blue)"
+              />
+              <text x="280" y="143" text-anchor="middle" fill="#286084" font-size="12" font-weight="800">
+                CNPJ / Nome
+              </text>
+
+              <!-- Barramento Interno -> Dashboard Monitor -->
+              <path
+                d="M 335 395 L 225 395"
+                stroke="#23875d"
+                stroke-width="3.5"
+                marker-end="url(#arrow-green)"
+              />
+              <text x="280" y="383" text-anchor="middle" fill="#23875d" font-size="12" font-weight="800">
+                Score &amp; Raio-X
+              </text>
+
+              <!-- Barramento Front -> Orquestrador -->
+              <path
+                d="M 375 185 L 475 185"
+                stroke="#286084"
+                stroke-width="3.5"
+                marker-end="url(#arrow-blue)"
+              />
+
+              <!-- Motor Bayesiano -> Barramento Front -->
+              <path
+                d="M 475 375 L 375 375"
+                stroke="#23875d"
+                stroke-width="3.5"
+                marker-end="url(#arrow-green)"
+              />
+
+              <!-- Orquestrador <-> Barramento Externo (API Bus) -->
+              <path
+                d="M 595 165 L 795 165"
+                stroke="#286084"
+                stroke-width="3.5"
+                marker-start="url(#arrow-blue)"
+                marker-end="url(#arrow-blue)"
+              />
+              <text x="695" y="152" text-anchor="middle" fill="#286084" font-size="12" font-weight="800">
+                REST / JSON
+              </text>
+
+              <!-- Barramento Externo -> Motor Bayesiano -->
+              <path
+                d="M 795 375 L 635 375"
+                stroke="#8a6049"
+                stroke-width="3.5"
+                marker-end="url(#arrow-copper)"
+              />
+              <text x="715" y="362" text-anchor="middle" fill="#8a6049" font-size="12" font-weight="800">
+                Metadados Limpos
+              </text>
+
+              <!-- Orquestrador -> Motor Bayesiano ( vertical ) -->
+              <path
+                d="M 535 235 L 535 310"
+                stroke="#286084"
+                stroke-width="3"
+                stroke-dasharray="6 4"
+                marker-end="url(#arrow-blue)"
+              />
+
+              <!-- Lightning Link 1: API Bus -> Comunica PJe Cloud -->
+              <path
+                d="M 835 155 L 925 135 L 915 152 L 1015 130"
+                stroke="#8a6049"
+                stroke-width="3.5"
+                fill="none"
+                marker-end="url(#arrow-copper)"
+              />
+              <!-- Lightning Bolt Icon 1 -->
+              <polygon
+                points="915,128 935,125 924,142 942,140 912,162 922,145 906,147"
+                fill="#bf7c20"
+              />
+              <text x="925" y="112" text-anchor="middle" fill="#8a6049" font-size="12" font-weight="800">
+                API Pública
+              </text>
+
+              <!-- Lightning Link 2: API Bus -> DataJud Cloud -->
+              <path
+                d="M 835 385 L 925 365 L 915 382 L 1015 360"
+                stroke="#8a6049"
+                stroke-width="3.5"
+                fill="none"
+                marker-end="url(#arrow-copper)"
+              />
+              <!-- Lightning Bolt Icon 2 -->
+              <polygon
+                points="915,358 935,355 924,372 942,370 912,392 922,375 906,377"
+                fill="#bf7c20"
+              />
+              <text x="925" y="342" text-anchor="middle" fill="#8a6049" font-size="12" font-weight="800">
+                JSON · US$ 0
+              </text>
+
+              <!-- ==================== BARRAMENTO CILÍNDRICO 1: CLIENT BUS ==================== -->
+              <g filter="url(#soft-shadow)">
+                <rect
+                  x="335"
+                  y="95"
+                  width="40"
+                  height="360"
+                  rx="20"
+                  fill="#e7f0f5"
+                  stroke="#286084"
+                  stroke-width="2.5"
+                />
+                <ellipse cx="355" cy="112" rx="19" ry="8" fill="#d0e2ec" stroke="#286084" stroke-width="2" />
+                <text
+                  x="355"
+                  y="280"
+                  text-anchor="middle"
+                  fill="#152638"
+                  font-size="13"
+                  font-weight="800"
+                  letter-spacing="2"
+                  transform="rotate(-90 355 280)"
+                >
+                  HTTP / FRONT-END
+                </text>
+              </g>
+
+              <!-- ==================== BARRAMENTO CILÍNDRICO 2: EXTERNAL API BUS ==================== -->
+              <g filter="url(#soft-shadow)">
+                <rect
+                  x="795"
+                  y="95"
+                  width="40"
+                  height="360"
+                  rx="20"
+                  fill="#eee5de"
+                  stroke="#8a6049"
+                  stroke-width="2.5"
+                />
+                <ellipse cx="815" cy="112" rx="19" ry="8" fill="#dfd0c5" stroke="#8a6049" stroke-width="2" />
+                <text
+                  x="815"
+                  y="280"
+                  text-anchor="middle"
+                  fill="#76533f"
+                  font-size="13"
+                  font-weight="800"
+                  letter-spacing="2"
+                  transform="rotate(-90 815 280)"
+                >
+                  GATEWAY APIS CNJ
+                </text>
+              </g>
+
+              <!-- ==================== NÓ 1: INTERFACE WEB (WORKSTATION) ==================== -->
+              <g filter="url(#soft-shadow)">
+                <!-- Monitor -->
+                <rect x="65" y="88" width="150" height="102" rx="10" fill="#ffffff" stroke="#152638" stroke-width="3" />
+                <rect x="75" y="98" width="130" height="74" rx="5" fill="#e7f0f5" />
+                <!-- Search UI inside screen -->
+                <rect x="87" y="114" width="106" height="18" rx="4" fill="#ffffff" stroke="#286084" stroke-width="1.8" />
+                <circle cx="97" cy="123" r="4" stroke="#286084" stroke-width="1.8" />
+                <rect x="87" y="140" width="64" height="8" rx="3" fill="#39789e" opacity="0.5" />
+                <rect x="87" y="153" width="86" height="8" rx="3" fill="#39789e" opacity="0.3" />
+                <!-- Stand -->
+                <path d="M 122 190 L 112 212 L 168 212 L 158 190 Z" fill="#dce2e7" stroke="#152638" stroke-width="2.5" />
+                <line x1="98" y1="212" x2="182" y2="212" stroke="#152638" stroke-width="3.5" stroke-linecap="round" />
+              </g>
+              <text x="140" y="240" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
+                1. Interface Web
+              </text>
+              <text x="140" y="261" text-anchor="middle" fill="#5a6b7e" font-size="14" font-weight="600">
+                HTML · Tailwind · JS
+              </text>
+
+              <!-- ==================== NÓ 6: DASHBOARD (MONITOR DE RISCO) ==================== -->
+              <g filter="url(#soft-shadow)">
+                <rect x="65" y="325" width="150" height="105" rx="10" fill="#ffffff" stroke="#23875d" stroke-width="3" />
+                <rect x="75" y="335" width="130" height="77" rx="5" fill="#e1f2e9" />
+                <!-- Bar chart inside screen -->
+                <rect x="92" y="380" width="16" height="22" rx="2" fill="#286084" />
+                <rect x="116" y="366" width="16" height="36" rx="2" fill="#8a6049" />
+                <rect x="140" y="350" width="16" height="52" rx="2" fill="#23875d" />
+                <circle cx="178" cy="364" r="14" fill="#ffffff" stroke="#23875d" stroke-width="3" />
+                <polyline points="172 364 176 368 185 359" stroke="#23875d" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+                <!-- Stand -->
+                <path d="M 122 430 L 112 452 L 168 452 L 158 430 Z" fill="#dce2e7" stroke="#152638" stroke-width="2.5" />
+                <line x1="98" y1="452" x2="182" y2="452" stroke="#152638" stroke-width="3.5" stroke-linecap="round" />
+              </g>
+              <text x="140" y="480" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
+                6. Dashboard
+              </text>
+              <text x="140" y="501" text-anchor="middle" fill="#23875d" font-size="14" font-weight="700">
+                Desfechos &amp; Confiança
+              </text>
+
+              <!-- ==================== NÓ 2: ORQUESTRADOR (SERVER TOWER) ==================== -->
+              <g filter="url(#soft-shadow)">
+                <rect x="480" y="86" width="110" height="145" rx="10" fill="#152638" stroke="#286084" stroke-width="3" />
+                <!-- Server slots & LEDs -->
+                <rect x="496" y="104" width="78" height="22" rx="4" fill="#213c56" />
+                <circle cx="508" cy="115" r="4" fill="#23875d" />
+                <circle cx="520" cy="115" r="4" fill="#dfbe9f" />
+                <line x1="536" y1="115" x2="562" y2="115" stroke="#8fa0af" stroke-width="2.5" />
+
+                <rect x="496" y="136" width="78" height="22" rx="4" fill="#213c56" />
+                <circle cx="508" cy="147" r="4" fill="#23875d" />
+                <circle cx="520" cy="147" r="4" fill="#23875d" />
+                <line x1="536" y1="147" x2="562" y2="147" stroke="#8fa0af" stroke-width="2.5" />
+
+                <rect x="496" y="168" width="78" height="44" rx="5" fill="#213c56" />
+                <text x="535" y="195" text-anchor="middle" fill="#dfbe9f" font-size="14" font-weight="800">
+                  API REST
+                </text>
+              </g>
+              <text x="535" y="257" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
+                2. Orquestrador
+              </text>
+              <text x="535" y="278" text-anchor="middle" fill="#5a6b7e" font-size="14" font-weight="600">
+                Python 3.11 · Flask
+              </text>
+
+              <!-- ==================== NÓ 5: MOTOR ESTATÍSTICO + CACHE DB ==================== -->
+              <g filter="url(#soft-shadow)">
+                <!-- Main AI Engine Box -->
+                <rect x="480" y="315" width="150" height="120" rx="14" fill="#ffffff" stroke="#286084" stroke-width="3" />
+                <!-- Bayesian Graph inside -->
+                <circle cx="520" cy="355" r="10" fill="#e7f0f5" stroke="#286084" stroke-width="2.5" />
+                <circle cx="520" cy="398" r="10" fill="#e7f0f5" stroke="#286084" stroke-width="2.5" />
+                <circle cx="565" cy="376" r="12" fill="#eee5de" stroke="#8a6049" stroke-width="2.5" />
+                <circle cx="605" cy="376" r="11" fill="#e1f2e9" stroke="#23875d" stroke-width="2.5" />
+                <line x1="530" y1="358" x2="553" y2="371" stroke="#286084" stroke-width="2.2" />
+                <line x1="530" y1="395" x2="553" y2="381" stroke="#286048" stroke-width="2.2" />
+                <line x1="577" y1="376" x2="594" y2="376" stroke="#23875d" stroke-width="2.5" />
+                <text x="555" y="424" text-anchor="middle" fill="#286084" font-size="12" font-weight="800">
+                  BAYES + RANKING
+                </text>
+              </g>
+              <text x="555" y="464" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
+                5. Motor Estatístico
+              </text>
+              <text x="555" y="485" text-anchor="middle" fill="#5a6b7e" font-size="14" font-weight="600">
+                Inferência Bayesiana
+              </text>
+
+              <!-- ==================== NÓ 3: COMUNICA PJE (CLOUD) ==================== -->
+              <g filter="url(#soft-shadow)">
+                <path
+                  d="M 1065 175 C 1032 175 1015 152 1022 126 C 1026 102 1050 88 1074 94 C 1088 70 1126 65 1150 84 C 1176 74 1210 90 1214 118 C 1236 126 1242 156 1220 172 C 1212 175 1198 175 1185 175 Z"
+                  fill="#ffffff"
+                  stroke="#8a6049"
+                  stroke-width="3"
+                />
+                <!-- Search lens inside cloud -->
+                <circle cx="1118" cy="126" r="18" fill="#eee5de" stroke="#8a6049" stroke-width="2.8" />
+                <line x1="1131" y1="139" x2="1145" y2="153" stroke="#8a6049" stroke-width="3.5" stroke-linecap="round" />
+              </g>
+              <text x="1128" y="206" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
+                3. Comunica PJe
+              </text>
+              <text x="1128" y="227" text-anchor="middle" fill="#5a6b7e" font-size="14" font-weight="600">
+                Busca Processos por Parte
+              </text>
+
+              <!-- ==================== NÓ 4: DATAJUD · CNJ (CLOUD + DB CYLINDER) ==================== -->
+              <g filter="url(#soft-shadow)">
+                <path
+                  d="M 1065 415 C 1032 415 1015 392 1022 366 C 1026 342 1050 328 1074 334 C 1088 310 1126 305 1150 324 C 1176 314 1210 330 1214 358 C 1236 366 1242 396 1220 412 C 1212 415 1198 415 1185 415 Z"
+                  fill="#ffffff"
+                  stroke="#286084"
+                  stroke-width="3"
+                />
+                <!-- Database Cylinder inside DataJud -->
+                <path
+                  d="M 1098 350 L 1098 392 C 1098 399 1158 399 1158 392 L 1158 350 Z"
+                  fill="#e7f0f5"
+                  stroke="#286084"
+                  stroke-width="2.5"
+                />
+                <ellipse cx="1128" cy="350" rx="30" ry="9" fill="#ffffff" stroke="#286084" stroke-width="2.5" />
+                <path d="M 1098 364 C 1098 371 1158 371 1158 364" stroke="#286084" stroke-width="2" fill="none" />
+                <path d="M 1098 378 C 1098 385 1158 385 1158 378" stroke="#286084" stroke-width="2" fill="none" />
+              </g>
+              <text x="1128" y="446" text-anchor="middle" fill="#1b2a3a" font-size="19" font-weight="850">
+                4. DataJud · CNJ
+              </text>
+              <text x="1128" y="467" text-anchor="middle" fill="#5a6b7e" font-size="14" font-weight="600">
+                Metadados Processuais JSON
+              </text>
+            </svg>
+          </div>
+        </div>
+        <div class="footer">
+          <span>PYTHON / FLASK / DATAJUD / COMUNICA PJE</span
+          ><
+        </div>
+      </section>
+
+      <!-- SLIDE 6: NEGÓCIO E PRÓXIMO PASSO -->
+      <section class="slide dark" data-time="2:30–3:00">
+        <div class="topline">
+          <div class="brand"><span class="mark">⚖</span> RadarJus</div>
+          <span class="tag">Negócio e próximo passo</span>
+        </div>
+        <div class="slide-body">
+          <div class="eyebrow">SaaS B2B · gestão de terceiros e compliance</div>
+          <h2>
+            Prevenir custa menos<br />do que responder
+            <span class="accent">à condenação.</span>
+          </h2>
+          <p class="ask">
+            Empresas contratantes pagam uma assinatura recorrente para monitorar
+            fornecedores, identificar padrões de risco e apoiar decisões de
+            homologação.
+          </p>
+          <div class="grid2" style="margin-top: 2.8vh; gap: 2.5vw">
+            <div>
+              <div class="eyebrow">Mercado inicial</div>
+              <h3>Pernambuco · TRT-6</h3>
+              <p class="small" style="color: #c9d5e0 !important">
+                Validar a dor e o produto com empresas da região; evoluir para
+                cobertura nacional.
+              </p>
+            </div>
+            <div>
+              <div class="eyebrow">Nosso pedido</div>
+              <h3>Clientes beta e validação</h3>
+              <p class="small" style="color: #c9d5e0 !important">
+                Buscamos empresas parceiras para testar o motor Bayesiano em
+                cenários reais e gerar tração inicial.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>RADARJUS · INTELIGÊNCIA JURÍDICA PARA GESTÃO DE TERCEIROS</span
+          >
+        </div>
+      </section>
+
+      <!-- SLIDE 7: EQUIPE -->
+      <section class="slide" data-time="Equipe">
+        <div class="topline">
+          <div class="brand">
+            <span class="mark" style="color: var(--copper)">⚖</span> RadarJus
+          </div>
+          <span class="tag">Squad</span>
+        </div>
+        <div class="slide-body">
+          <div class="eyebrow">Quem constrói o RadarJus</div>
+          <h2>Nossa <span class="accent">equipe.</span></h2>
+          <!-- <p style="max-width: 75vw">
+            Competências complementares em tecnologia, dados, negócios e
+            inteligência jurídica para transformar a gestão de risco de
+            terceiros.
+          </p> -->
+
+          <div class="team-grid">
+            <div class="team-card">
+              <div class="team-avatar">
+                <img src="fotos/claudio.png" alt="Cláudio Farias" />
+              </div>
+              <div class="team-name">Cláudio Farias</div>
+              <span class="team-role">Designer / Desenvolvedor Front-end</span>
+            </div>
+
+            <div class="team-card">
+              <div class="team-avatar">
+                <img src="fotos/laryssa.png" alt="Laryssa Falcão" />
+              </div>
+              <div class="team-name">Laryssa Falcão</div>
+              <span class="team-role">Engenheira de Dados</span>
+            </div>
+
+            <div class="team-card">
+              <div class="team-avatar">
+                <img src="fotos/luana.png" alt="Luana Vitória" />
+              </div>
+              <div class="team-name">Luana Brito</div>
+              <span class="team-role">Engenheira de IA e DevOps</span>
+            </div>
+
+            <div class="team-card">
+              <div class="team-avatar">
+                <img src="fotos/matheus.png" alt="Matheus Marcos" />
+              </div>
+              <div class="team-name">Matheus Marcos</div>
+              <span class="team-role">Desenvolvedor Back-end</span>
+            </div>
+
+            <div class="team-card">
+              <div class="team-avatar">
+                <img src="fotos/mayara.png" alt="Mayara Karoline" />
+              </div>
+              <div class="team-name">Mayara Karoline</div>
+              <span class="team-role">Tech Lead / Cientista de IA</span>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>EQUIPE RADARJUS · SQUAD MULTIDISCIPLINAR</span>
+         
+        </div>
+      </section>
+
+      <div class="controls">
+        <div class="counter" id="counter">01 / 07</div>
+        <button id="prev" aria-label="Anterior">‹</button>
+        <button id="next" aria-label="Próximo">›</button>
+      </div>
+      <div class="progress" id="progress"></div>
+    </div>
+    <script>
+      const slides = [...document.querySelectorAll(".slide")];
+      let index = 0;
+      function show(n) {
+        index = Math.max(0, Math.min(slides.length - 1, n));
+        slides.forEach((s, i) => s.classList.toggle("active", i === index));
+        document.getElementById("counter").textContent =
+          String(index + 1).padStart(2, "0") +
+          " / " +
+          String(slides.length).padStart(2, "0");
+        document.getElementById("progress").style.width =
+          ((index + 1) / slides.length) * 100 + "%";
+      }
+      document.getElementById("prev").onclick = () => show(index - 1);
+      document.getElementById("next").onclick = () => show(index + 1);
+      document.addEventListener("keydown", (e) => {
+        if (["ArrowRight", " ", "PageDown"].includes(e.key)) {
+          e.preventDefault();
+          show(index + 1);
+        }
+        if (["ArrowLeft", "PageUp"].includes(e.key)) {
+          e.preventDefault();
+          show(index - 1);
+        }
+        if (e.key.toLowerCase() === "f") {
+          if (!document.fullscreenElement)
+            document.documentElement.requestFullscreen?.();
+          else document.exitFullscreen?.();
+        }
+        if (e.key === "Home") show(0);
+        if (e.key === "End") show(slides.length - 1);
+      });
+      let touchX = 0;
+      document.addEventListener(
+        "touchstart",
+        (e) => (touchX = e.changedTouches[0].screenX),
+        { passive: true },
+      );
+      document.addEventListener(
+        "touchend",
+        (e) => {
+          let dx = e.changedTouches[0].screenX - touchX;
+          if (Math.abs(dx) > 60) show(index + (dx < 0 ? 1 : -1));
+        },
+        { passive: true },
+      );
+      show(0);
+    </script>
+  </body>
+</html>

@@ -57,7 +57,8 @@ function normalize(raw) {
     searchId: payload.search_id ?? payload.id ?? null,
     searchedAt: payload.updated_at || payload.created_at || null,
     scanStatus: payload.scan_status || 'COMPLETED',
-    aiAnalysis: isRecord(payload.ai_analysis) ? payload.ai_analysis : null,
+    aiAnalysis: isRecord(payload.ai_analysis) ? payload.ai_analysis
+      : isRecord(payload.parecer_agente_adk) ? payload.parecer_agente_adk : null,
     cached: Boolean(payload.cached),
     cacheLevel: payload.cache_level || null,
   };
@@ -253,16 +254,35 @@ function Overview({ data, navigate }) {
         <Stat label="COBERTURA DO SIGILO" value={secrecyEntries.length ? 'Parcial' : 'Indisponível'} hint="Nível de sigilo judicial informado" icon={ShieldAlert} tone="amber" />
       </div>
 
-      {/* Parecer do Consultor de Inteligência Artificial */}
+      {/* Parecer do Consultor de Inteligência Artificial (Agente ADK radarjusAgent) */}
       {ai && (
         <Panel
-          title="Diagnóstico Executivo & Compliance (IA)"
-          subtitle={`Parecer técnico gerado via ${ai.modelo_utilizado || 'IA Preditiva'}`}
-          action={<Tag type={ai.perfil_risco_consolidado?.includes('Baixo') ? 'green' : ai.perfil_risco_consolidado?.includes('Moderado') ? 'amber' : 'red'}>Risco: {ai.perfil_risco_consolidado || 'Geral'}</Tag>}
+          title="Diagnóstico Executivo & Compliance (Agente ADK · IA)"
+          subtitle={`Parecer técnico gerado via ${ai.modelo_utilizado || 'IA Preditiva'}${ai.orquestrador ? ` · ${ai.orquestrador}` : ''}`}
+          action={
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+              {ai.recomendacao_homologacao && (
+                <Tag
+                  type={
+                    ai.recomendacao_homologacao.includes('SEM RESTRIÇÕES')
+                      ? 'green'
+                      : ai.recomendacao_homologacao.includes('RETENÇÃO')
+                        ? 'amber'
+                        : 'red'
+                  }
+                >
+                  Súmula 331 TST: {ai.recomendacao_homologacao}
+                </Tag>
+              )}
+              <Tag type={ai.perfil_risco_consolidado?.includes('Baixo') ? 'green' : ai.perfil_risco_consolidado?.includes('Moderado') ? 'amber' : 'red'}>
+                Risco: {ai.perfil_risco_consolidado || 'Geral'}
+              </Tag>
+            </div>
+          }
         >
           <div style={{ display: 'grid', gap: '16px' }}>
             <p style={{ margin: 0, fontSize: '14px', lineHeight: '1.7', color: '#273b4e' }}>
-              {ai.resumo_executivo}
+              {ai.resumo_executivo || ai.parecer_governanca}
             </p>
             {ai.taxa_historica_vitoria_empresa_pct != null && (
               <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', padding: '12px 16px', background: '#f5f8fa', borderRadius: '10px' }}>
@@ -284,6 +304,16 @@ function Overview({ data, navigate }) {
                     <strong style={{ fontSize: '18px', color: '#245a81' }}>{formatPercent(ai.taxa_historica_acordos_pct)}</strong>
                   </div>
                 )}
+              </div>
+            )}
+            {Array.isArray(ai.alertas_sumula_331) && ai.alertas_sumula_331.length > 0 && (
+              <div>
+                <b style={{ display: 'block', fontSize: '13px', marginBottom: '6px', color: '#b67b23' }}>Alertas Súmula 331 do TST (Agente ADK):</b>
+                <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '12px', lineHeight: '1.6', color: '#556677' }}>
+                  {ai.alertas_sumula_331.map((alerta, i) => (
+                    <li key={i}>{alerta}</li>
+                  ))}
+                </ul>
               </div>
             )}
             {Array.isArray(ai.recomendacoes_compliance) && ai.recomendacoes_compliance.length > 0 && (
