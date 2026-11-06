@@ -483,49 +483,80 @@ function Predictions({ data }) {
         <div>
           <div className="eyebrow">EMPRESA / ESTIMATIVAS</div>
           <h1>Previsão de Desfecho nos Processos Abertos</h1>
-          <p>{data ? `Probabilidade estatística da empresa vencer vs ser condenada em cada motivo (${data.name}).` : 'Aguardando dados de uma consulta.'}</p>
+          <p>{data ? `Distribuição posterior Dirichlet-Multinomial (Vitória, Acordo e Condenação) com Intervalo de Credibilidade 90% (${data.name}).` : 'Aguardando dados de uma consulta.'}</p>
         </div>
-        <Tag type="blue">Motor Bayesiano Empírico</Tag>
+        <Tag type="blue">Dirichlet-Multinomial · IC 90% Beta</Tag>
       </div>
 
       <div className="info-banner warning">
         <AlertCircle size={20} />
         <div>
-          <b>Metodologia Bayesiana de Previsão de Risco</b>
-          <p>A probabilidade de vitória da empresa nos processos em aberto é calculada ponderando as condenações, acordos e improcedências anteriores com a taxa-base dos Tribunais Regionais do Trabalho (TRTs).</p>
+          <b>Modelo Conjugado Dirichlet-Multinomial &amp; Intervalo de Credibilidade Beta (90%)</b>
+          <p>Separa explicitamente a probabilidade de Improcedência (vitória real), Acordo Homologado e Condenação com shrinkage Empirical Bayes, ajuste de perícia em escala logit e projeção de condenações esperadas na carteira aberta.</p>
         </div>
       </div>
 
-      <Panel title="Probabilidade de Êxito nos Processos Abertos" subtitle="Estimativa da chance da empresa vencer por motivo de ação">
+      <Panel title="Probabilidade Posterior nos Processos Abertos" subtitle="Distribuição tripartida e Intervalo de Credibilidade de 90% por motivo">
         {predictions.length ? (
           <div className="table-scroll">
             <table>
               <thead>
                 <tr>
                   <th>Motivo da Ação (TPU/PJe)</th>
-                  <th>Chance de Vitória (Empresa)</th>
-                  <th>Risco de Condenação</th>
-                  <th>Confiança Estatística</th>
-                  <th>Processos em Aberto</th>
+                  <th>Vitória (Improcedência)</th>
+                  <th>Acordo</th>
+                  <th>Condenação</th>
+                  <th>IC 90% (Condenação)</th>
+                  <th>Abertos (Cond. Esperadas)</th>
                   <th>Diagnóstico</th>
                 </tr>
               </thead>
               <tbody>
                 {predictions.map((prediction, index) => {
-                  const probVencer = prediction.probabilidade_vencer_pct ?? Math.max(2, 100 - (prediction.probabilidade_condenacao_pct || 0));
-                  const isHighWin = probVencer >= 60.0;
-                  const isMidWin = probVencer >= 40.0;
+                  const probVencer = prediction.probabilidade_vencer_pct ?? Math.max(0, 100 - (prediction.probabilidade_condenacao_pct || 0) - (prediction.probabilidade_acordo_pct || 0));
+                  const probAcordo = prediction.probabilidade_acordo_pct ?? 0;
+                  const probCond = prediction.probabilidade_condenacao_pct ?? 0;
+                  const isHighWin = probVencer >= 45.0;
+                  const isMidWin = probCond < 55.0;
+                  const hasIC = prediction.ic_90_inferior_pct != null && prediction.ic_90_superior_pct != null;
                   return (
                     <tr key={`${prediction.motivo}-${index}`}>
                       <td><b>{prediction.motivo || 'Não informado'}</b></td>
                       <td>
-                        <span className="percent" style={{ color: isHighWin ? '#25865a' : isMidWin ? '#b67b23' : '#c34a4a', fontWeight: 'bold' }}>
+                        <span className="percent" style={{ color: '#25865a', fontWeight: 'bold' }}>
                           {formatPercent(probVencer)}
                         </span>
                       </td>
-                      <td><span className="percent" style={{ color: '#667788' }}>{formatPercent(prediction.probabilidade_condenacao_pct)}</span></td>
-                      <td>{formatPercent(prediction.confianca_previsao_pct)}</td>
-                      <td><b>{formatNumber(prediction.processos_abertos)}</b></td>
+                      <td>
+                        <span className="percent" style={{ color: '#245a81', fontWeight: 600 }}>
+                          {formatPercent(probAcordo)}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="percent" style={{ color: probCond >= 55 ? '#c34a4a' : '#667788', fontWeight: 'bold' }}>
+                          {formatPercent(probCond)}
+                        </span>
+                      </td>
+                      <td>
+                        {hasIC ? (
+                          <span style={{ fontSize: '12px', color: '#556677' }}>
+                            [{formatPercent(prediction.ic_90_inferior_pct)} – {formatPercent(prediction.ic_90_superior_pct)}]
+                            <small style={{ display: 'block', color: '#8899a6' }}>
+                              Precisão: {formatPercent(prediction.confianca_previsao_pct)} ({prediction.nivel_confianca || 'Amostral'})
+                            </small>
+                          </span>
+                        ) : (
+                          formatPercent(prediction.confianca_previsao_pct)
+                        )}
+                      </td>
+                      <td>
+                        <b>{formatNumber(prediction.processos_abertos)}</b>
+                        {prediction.condenacoes_esperadas_abertos != null && prediction.processos_abertos > 0 && (
+                          <small style={{ display: 'block', color: '#8899a6' }}>
+                            ~{prediction.condenacoes_esperadas_abertos.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} esperadas
+                          </small>
+                        )}
+                      </td>
                       <td>
                         <Tag type={isHighWin ? 'green' : isMidWin ? 'amber' : 'red'}>
                           {prediction.diagnostico_chance_vitoria || (isHighWin ? 'Alta probabilidade de êxito' : isMidWin ? 'Risco equilibrado' : 'Alto risco de condenação')}
@@ -545,16 +576,16 @@ function Predictions({ data }) {
       <Panel title="Como interpretar estes indicadores">
         <div className="explain-grid">
           <div>
-            <b>Chance de Vitória da Empresa</b>
-            <p>Calculada a partir do histórico de improcedências e desfechos favoráveis da empresa frente ao histórico do Tribunal.</p>
+            <b>Vitória vs. Acordo vs. Condenação</b>
+            <p>Acordos não são contabilizados como vitória da empresa. As três probabilidades posteriores somam 100% em cada motivo.</p>
           </div>
           <div>
-            <b>Grau de Confiança (%)</b>
-            <p>Aumenta progressivamente com o número de processos julgados anteriores (amostra estatística sólida).</p>
+            <b>Intervalo de Credibilidade Beta (IC 90%)</b>
+            <p>Mede a incerteza real da amostra [p5, p95] e aplica desconto por censura à direita quando há muitos processos em aberto.</p>
           </div>
           <div>
-            <b>Ações Preventivas</b>
-            <p>Priorizar a revisão de processos abertos em motivos com baixo índice de vitória e elevado risco de condenação.</p>
+            <b>Condenações Esperadas nos Abertos</b>
+            <p>Projeta o passivo esperado multiplicando o volume de processos abertos pela probabilidade posterior de condenação do motivo.</p>
           </div>
         </div>
       </Panel>
