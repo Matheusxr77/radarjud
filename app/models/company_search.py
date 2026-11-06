@@ -55,7 +55,13 @@ class CompanySearch(db.Model):
         outcomes = self.outcomes_summary or {}
         julgados = outcomes.get("condenacoes", 0) + outcomes.get("acordos", 0) + outcomes.get("improcedentes", 0)
         condenacoes = outcomes.get("condenacoes", 0)
-        taxa_cond = round((condenacoes / julgados) * 100, 1) if julgados > 0 else (self.overall_risk_score if self.total_processes > 0 else None)
+        taxa_cond_empirica = round((condenacoes / julgados) * 100, 1) if julgados > 0 else None
+        # Posterior com shrinkage Bayesiano (alpha_0 = 3.0, p0 = 0.50) para evitar ruído em amostras pequenas
+        prob_cond_shrunk = (
+            round(((condenacoes + 3.0 * 0.50) / (julgados + 3.0)) * 100.0, 1)
+            if julgados > 0
+            else (self.overall_risk_score if self.total_processes > 0 else None)
+        )
 
         public_count = max(0, (self.total_processes or 0) - (self.secrecy_count or 0))
         niveis_sigilo = {"0": public_count}
@@ -78,7 +84,8 @@ class CompanySearch(db.Model):
             "ranking_motivos": self.ranking_motivos or [],
             "plus_previsao_condenacao": self.predictions_summary or [],
             "overall_risk_score": self.overall_risk_score,
-            "probabilidade_condenacao_geral_pct": taxa_cond,
+            "probabilidade_condenacao_geral_pct": prob_cond_shrunk,
+            "taxa_historica_condenacao_pct": taxa_cond_empirica,
             "score_risco_terceirizacao": self.overall_risk_score,
             "ai_analysis": self.ai_analysis or {},
             "created_at": self.created_at.isoformat() if self.created_at else None,

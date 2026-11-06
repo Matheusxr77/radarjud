@@ -1,22 +1,20 @@
 import os
 import re
-import math
-import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections import Counter, defaultdict
+from collections import defaultdict
 from typing import Dict, List, Any, Optional, Tuple
 
 import requests
 
 from app.utils.sanitizer import sanitize_company_name, is_cnpj, fetch_cnpj_brasilapi
 from app.utils.crypto import generate_movements_hash
-from app.utils.rate_limiter import RateLimiter, with_exponential_backoff
+from app.utils.rate_limiter import RateLimiter
 from app.services.ai_analyzer import LegalAIAnalyzer
+from app.services.prediction_engine import BayesianRiskPredictor, safe_int
 from app.services.tpu_constants import (
     TPU_OUTCOME_CODES,
     TPU_EXPERT_REPORT_CODES,
-    DEFAULT_TRT_BASE_PROBABILITY,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,17 +96,17 @@ class CNJMetadataOrchestrator:
     - Execução Fast-Path (< 3s) e Deep Scan assíncrono em background.
     - Rate Limiting e Exponential Backoff com jitter.
     - Análise semântica de publicações PJe para inferir assuntos quando rotulados como 'Outros Assuntos'.
-    - Motor Preditivo Bayesiano com cálculo explícito da probabilidade de vitória da empresa.
+    - Motor Preditivo Bayesiano (Dirichlet-Multinomial / Beta-Binomial com IC 90% e Shrinkage Empírico).
     - Geração de hash SHA-256 para curto-circuito de chamadas à IA.
     """
 
     # NLP Leve de Sentenças e Despachos do PJe
-    REGEX_PROCEDENCIA = re.compile(
-        r"\b(julgo\s+procedente|acolho\s+os\s+pedidos|declarar\s+a\s+proced[êe]ncia|condenar\s+a\s+reclamada)\b",
-        re.IGNORECASE,
-    )
     REGEX_PROCEDENCIA_PARTE = re.compile(
         r"\b(julgo\s+parcialmente\s+procedente|acolho\s+em\s+parte|proced[êe]ncia\s+em\s+parte|condena-\se\s+em\s+parte|procedentes\s+em\s+parte)\b",
+        re.IGNORECASE,
+    )
+    REGEX_PROCEDENCIA = re.compile(
+        r"\b(julgo\s+procedente|acolho\s+os\s+pedidos|declarar\s+a\s+proced[êe]ncia|condenar\s+a\s+reclamada)\b",
         re.IGNORECASE,
     )
     REGEX_IMPROCEDENCIA = re.compile(
@@ -117,6 +115,10 @@ class CNJMetadataOrchestrator:
     )
     REGEX_ACORDO = re.compile(
         r"\b(homolog(o|ar|a-se)\s+(o\s+)?acordo|concilia[çc][ãa]o\s+homologada|transa[çc][ãa]o\s+homologada)\b",
+        re.IGNORECASE,
+    )
+    REGEX_EXTINCAO_SEM_MERITO = re.compile(
+        r"\b(extin(go|to)\s+o\s+processo\s+sem\s+resolu[çc][ãa]o\s+do\s+m[ée]rito|homologo\s+a\s+desist[êe]ncia|arquive-se\s+definitivamente)\b",
         re.IGNORECASE,
     )
     REGEX_LAUDO_PERICIAL = re.compile(
@@ -130,22 +132,35 @@ class CNJMetadataOrchestrator:
         self.datajud_key = os.getenv("DATAJUD_API_KEY", "")
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) RadarJus/1.0 (Compliance Monitor)"
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) RadarJus/2.0 (Compliance Monitor)"
         })
         self._cache = {}
         self.ai_analyzer = LegalAIAnalyzer()
+        self.predictor = BayesianRiskPredictor()
+
+    def classify_text_decision_detailed(self, text: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Classifica o desfecho processual e a subcategoria (diferenciando procedência total,
+        procedência em parte, acordo, improcedência e extinção sem mérito).
+        """
+        if not text:
+            return None, None
+        if self.REGEX_ACORDO.search(text):
+            return "acordos", "acordo_homologado"
+        if self.REGEX_PROCEDENCIA_PARTE.search(text):
+            return "condenacoes", "procedencia_parcial"
+        if self.REGEX_PROCEDENCIA.search(text):
+            return "condenacoes", "procedencia_total"
+        if self.REGEX_IMPROCEDENCIA.search(text):
+            return "improcedentes", "improcedencia"
+        if self.REGEX_EXTINCAO_SEM_MERITO.search(text):
+            return "extintos_sem_merito", "extinto_sem_merito"
+        return None, None
 
     def classify_text_decision(self, text: str) -> Optional[str]:
-        """Classifica o desfecho processual a partir do texto publicado no Comunica PJe."""
-        if not text:
-            return None
-        if self.REGEX_ACORDO.search(text):
-            return "acordos"
-        if self.REGEX_PROCEDENCIA_PARTE.search(text) or self.REGEX_PROCEDENCIA.search(text):
-            return "condenacoes"
-        if self.REGEX_IMPROCEDENCIA.search(text):
-            return "improcedentes"
-        return None
+        """Classifica o desfecho processual principal a partir do texto publicado no Comunica PJe."""
+        outcome, _ = self.classify_text_decision_detailed(text)
+        return outcome
 
     def detect_expert_report_in_text(self, text: str) -> bool:
         """Verifica se o texto menciona perícia técnica ou laudo pericial."""
@@ -156,25 +171,29 @@ class CNJMetadataOrchestrator:
     def parse_datajud_movements(self, movements: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Analisa a árvore de movimentos do DataJud utilizando códigos da TPU/CNJ."""
         outcome = "em_aberto"
+        sub_outcome = None
         has_expert_report = False
 
         for mov in movements:
             if not isinstance(mov, dict):
                 continue
-            code = mov.get("codigo")
-            if not code:
+            code = safe_int(mov.get("codigo"))
+            if code is None:
                 continue
 
             if code in TPU_EXPERT_REPORT_CODES:
                 has_expert_report = True
 
             if code in TPU_OUTCOME_CODES and outcome == "em_aberto":
-                category = TPU_OUTCOME_CODES[code]["categoria"]
-                if category in ("condenacoes", "improcedentes", "acordos"):
+                tpu_info = TPU_OUTCOME_CODES[code]
+                category = tpu_info["categoria"]
+                if category in ("condenacoes", "improcedentes", "acordos", "extintos_sem_merito"):
                     outcome = category
+                    sub_outcome = tpu_info.get("subcategoria")
 
         return {
             "outcome": outcome,
+            "sub_outcome": sub_outcome,
             "has_expert_report": has_expert_report,
         }
 
@@ -414,7 +433,7 @@ class CNJMetadataOrchestrator:
             pje_texts = info.get("textos_pje", [])
             pje_classes = info.get("classes_pje", [])
             combined_pje = " ".join(pje_texts)
-            decision_from_text = self.classify_text_decision(combined_pje)
+            decision_from_text, sub_decision_from_text = self.classify_text_decision_detailed(combined_pje)
             has_expert_text = self.detect_expert_report_in_text(combined_pje)
             norm_court = self.normalize_court(info.get("tribunal"), num_proc)
 
@@ -427,8 +446,11 @@ class CNJMetadataOrchestrator:
                 "grau": "G1",
                 "subjects": inferred_subs,
                 "primary_subject": primary_sub,
+                "primary_subject_code": None,
                 "nivelSigilo": 0,
+                "nivel_sigilo": 0,
                 "sentence_outcome": decision_from_text or "em_aberto",
+                "sentence_sub_outcome": sub_decision_from_text,
                 "has_expert_report": has_expert_text,
                 "observation": obs,
                 "dataHoraUltimaAtualizacao": info.get("data_publicacao", ""),
@@ -470,6 +492,11 @@ class CNJMetadataOrchestrator:
                     subjects = [
                         a.get("nome") for a in raw_assuntos if isinstance(a, dict) and a.get("nome")
                     ]
+                    subject_codes = [
+                        safe_int(a.get("codigo"))
+                        for a in raw_assuntos
+                        if isinstance(a, dict) and safe_int(a.get("codigo")) is not None
+                    ]
 
                     # Inspeciona texto PJe se os assuntos oficiais forem genéricos
                     pje_texts = processes_map.get(num, {}).get("textos_pje", [])
@@ -481,16 +508,22 @@ class CNJMetadataOrchestrator:
                     mov_analysis = self.parse_datajud_movements(movimentos)
 
                     outcome = mov_analysis["outcome"]
+                    sub_outcome = mov_analysis.get("sub_outcome")
                     if outcome == "em_aberto" and entry["sentence_outcome"] != "em_aberto":
                         outcome = entry["sentence_outcome"]
+                        sub_outcome = entry.get("sentence_sub_outcome")
 
                     has_expert = mov_analysis["has_expert_report"] or entry["has_expert_report"]
+                    sigilo_val = safe_int(src.get("nivelSigilo"), default=0) or 0
 
                     entry.update({
                         "subjects": subjects,
                         "primary_subject": subjects[0] if subjects else entry["primary_subject"],
-                        "nivelSigilo": int(src.get("nivelSigilo", 0)),
+                        "primary_subject_code": subject_codes[0] if subject_codes else None,
+                        "nivelSigilo": sigilo_val,
+                        "nivel_sigilo": sigilo_val,
                         "sentence_outcome": outcome,
+                        "sentence_sub_outcome": sub_outcome,
                         "has_expert_report": has_expert,
                         "observation": observation or entry["observation"],
                         "grau": src.get("grau", "G1"),
@@ -507,114 +540,16 @@ class CNJMetadataOrchestrator:
         processes: List[Dict[str, Any]],
         scan_status: str = "COMPLETED",
     ) -> Dict[str, Any]:
-        """Calcula o sumário estatístico completo, ranking de motivos e predição bayesiana."""
-        total = len(processes)
-        reasons_counter = Counter()
-        outcomes = {"condenacoes": 0, "acordos": 0, "improcedentes": 0, "em_aberto": 0}
-        secrecy_levels = Counter()
-        history_by_reason = defaultdict(lambda: {
-            "condenacoes": 0, "acordos": 0, "improcedentes": 0, "laudo": 0, "em_aberto": 0
-        })
-
-        for p in processes:
-            sigilo = p.get("nivelSigilo", 0)
-            status = p.get("sentence_outcome", "em_aberto")
-            secrecy_levels[sigilo] += 1
-            if status in outcomes:
-                outcomes[status] += 1
-            else:
-                outcomes["em_aberto"] += 1
-
-            for reason in p.get("subjects", ["Outros Motivos Trabalhistas"]):
-                reasons_counter[reason] += 1
-                history_by_reason[reason][status] += 1
-                if p.get("has_expert_report"):
-                    history_by_reason[reason]["laudo"] += 1
-
-        ranking = [
-            {
-                "motivo": mot,
-                "quantidade": qtd,
-                "porcentagem": round((qtd / max(total, 1)) * 100, 1),
-            }
-            for mot, qtd in reasons_counter.most_common()
-        ]
-
-        predictions = []
-        for mot, stats in history_by_reason.items():
-            julgados = stats["condenacoes"] + stats["acordos"] + stats["improcedentes"]
-            delta_laudo = 5.0 if stats["laudo"] > 0 else 0.0
-
-            if julgados == 0:
-                # Não há processos julgados anteriormente pela empresa neste motivo
-                # Projeção adotando a média basal do tribunal sem inventar histórico fictício
-                prob_cond_pct = 68.0
-                prob_vencer_pct = 32.0
-                confidence = 20.0
-                diagnostico = "Média do TRT (Sem histórico anterior na empresa)"
-            else:
-                # Fórmula Bayesiana Pcond(m) com dados reais julgados da empresa
-                prob_cond = (
-                    ((stats["condenacoes"] + 0.65 * stats["acordos"] + 3 * 0.68) / (julgados + 3)) * 100
-                ) + delta_laudo
-                prob_cond_pct = round(max(5.0, min(98.0, prob_cond)), 1)
-                prob_vencer_pct = round(max(2.0, min(95.0, 100.0 - prob_cond_pct)), 1)
-                confidence = min(
-                    98.0,
-                    round((1 - (1 / math.sqrt(1 + 1.45 * julgados))) * 70 + 20 + 8, 1),
-                )
-                if prob_vencer_pct >= 60.0:
-                    diagnostico = "Alta probabilidade de êxito"
-                elif prob_vencer_pct >= 40.0:
-                    diagnostico = "Equilíbrio / Risco moderado"
-                else:
-                    diagnostico = "Risco elevado de condenação"
-
-            predictions.append({
-                "motivo": mot,
-                "processos_abertos": stats["em_aberto"],
-                "processos_julgados": julgados,
-                "probabilidade_condenacao_pct": prob_cond_pct,
-                "probabilidade_vencer_pct": prob_vencer_pct,
-                "diagnostico_chance_vitoria": diagnostico,
-                "confianca_previsao_pct": confidence,
-            })
-
-        predictions.sort(key=lambda x: (x["processos_abertos"], x["probabilidade_condenacao_pct"]), reverse=True)
-
-        secret_count = sum(qtd for lvl, qtd in secrecy_levels.items() if int(lvl) > 0)
-        secrecy_rate = round(secret_count / max(total, 1), 3)
-
-        # Score global de risco calibrado (0 a 100)
-        julgados_totais = outcomes["condenacoes"] + outcomes["acordos"] + outcomes["improcedentes"]
-        if total == 0:
-            overall_risk_score = 0.0
-            taxa_condenacao_pct = None
-        elif julgados_totais > 0:
-            taxa_condenacao = (outcomes["condenacoes"] + 0.65 * outcomes["acordos"]) / julgados_totais
-            taxa_condenacao_pct = round((outcomes["condenacoes"] / julgados_totais) * 100, 1)
-            overall_risk_score = round(min(100.0, max(5.0, (taxa_condenacao * 60 + secrecy_rate * 40) * 100)), 1)
-        else:
-            taxa_condenacao_pct = None
-            overall_risk_score = round(min(100.0, max(5.0, (0.40 * 60 + secrecy_rate * 40) * 100)), 1)
-
-        movements_hash = generate_movements_hash(processes)
-
-        return {
-            "empresa": company_name,
-            "total_processos": total,
-            "ranking_motivos": ranking,
-            "desfechos_sentencas": outcomes,
-            "niveis_sigilo": dict(secrecy_levels),
-            "taxa_sigilo_pct": round(secrecy_rate * 100, 1),
-            "score_risco_terceirizacao": overall_risk_score,
-            "probabilidade_condenacao_geral_pct": taxa_condenacao_pct if taxa_condenacao_pct is not None else (overall_risk_score if total > 0 else None),
-            "taxa_historica_condenacao_pct": taxa_condenacao_pct,
-            "plus_previsao_condenacao": predictions,
-            "scan_status": scan_status,
-            "movements_hash": movements_hash,
-            "processos": processes,
-        }
+        """
+        Delega o cálculo estatístico ao BayesianRiskPredictor (Dirichlet-Multinomial / Beta-Binomial
+        com Intervalo de Credibilidade de 90%, ajuste de laudo em escala logit e Shrinkage Empirical Bayes)
+        e anexa o hash de movimentos e os processos enriquecidos.
+        """
+        metrics = self.predictor.generate_dashboard_metrics(company_name, processes)
+        metrics["scan_status"] = scan_status
+        metrics["movements_hash"] = generate_movements_hash(processes)
+        metrics["processos"] = processes
+        return metrics
 
     def analyze_company_by_name(
         self,
@@ -640,20 +575,10 @@ class CNJMetadataOrchestrator:
         processes_map = self._fetch_comunica_pje(company_name, max_pages=max_pages, page_size=page_size)
 
         if not processes_map:
-            empty_res = {
-                "empresa": company_name,
-                "total_processos": 0,
-                "ranking_motivos": [],
-                "desfechos_sentencas": {"condenacoes": 0, "acordos": 0, "improcedentes": 0, "em_aberto": 0},
-                "niveis_sigilo": {},
-                "taxa_sigilo_pct": 0.0,
-                "score_risco_terceirizacao": 0.0,
-                "plus_previsao_condenacao": [],
-                "scan_status": "COMPLETED",
-                "movements_hash": generate_movements_hash([]),
-                "processos": [],
-                "ai_analysis": self.ai_analyzer.analyze_company({"empresa": company_name, "total_processos": 0}),
-            }
+            empty_res = self._calculate_metrics(company_name, [], scan_status="COMPLETED")
+            empty_res["ai_analysis"] = self.ai_analyzer.analyze_company(
+                {"empresa": company_name, "total_processos": 0}
+            )
             if not fast_path:
                 self._cache[cache_key] = empty_res
             return empty_res
@@ -661,13 +586,12 @@ class CNJMetadataOrchestrator:
         # 2. Enriquecimento no DataJud (em paralelo por tribunal)
         processes = self._enrich_with_datajud(processes_map)
 
-        # 3. Cálculo de métricas
-        # Se esgotou todas as páginas do Comunica PJe, o scan já é COMPLETED mesmo no fast_path
+        # 3. Cálculo de métricas via BayesianRiskPredictor
         has_more = getattr(self, "_last_fetch_has_more", False)
         status = "PARTIAL_FAST_PATH" if (fast_path and has_more) else "COMPLETED"
         metrics = self._calculate_metrics(company_name, processes, scan_status=status)
 
-        # 4. Geração de parecer de IA
+        # 4. Geração de parecer de IA (radarjusAgent ADK)
         ai_result = self.ai_analyzer.analyze_company(metrics)
         metrics["ai_analysis"] = ai_result
 

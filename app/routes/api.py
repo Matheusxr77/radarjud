@@ -226,10 +226,20 @@ def search_company():
             # (evita congelar a interface em uma busca preliminar incompleta)
             if cached_search and cached_search.is_recent(hours=24) and cached_search.scan_status == "COMPLETED":
                 logger.info("Curto-circuito Nível 1 ativado para '%s' (search_id=%d).", normalized_name, cached_search.id)
+                proc_dicts = [p.to_dict() for p in cached_search.processes]
                 res = cached_search.to_dict()
                 res["empresa"] = cached_search.company_name
                 res["total_processos"] = cached_search.total_processes
                 res["desfechos_sentencas"] = cached_search.outcomes_summary or {}
+                if proc_dicts:
+                    fresh_metrics = orchestrator.predictor.generate_dashboard_metrics(
+                        cached_search.company_name, proc_dicts
+                    )
+                    res["plus_previsao_condenacao"] = fresh_metrics["plus_previsao_condenacao"]
+                    res["score_risco_terceirizacao"] = fresh_metrics["score_risco_terceirizacao"]
+                    res["overall_risk_score"] = fresh_metrics["score_risco_terceirizacao"]
+                    cached_search.predictions_summary = fresh_metrics["plus_previsao_condenacao"]
+                    cached_search.overall_risk_score = fresh_metrics["score_risco_terceirizacao"]
                 # Re-executa o Agente ADK sobre os metadados para garantir parecer sempre atualizado
                 fresh_ai = orchestrator.ai_analyzer.analyze_company(res)
                 if fresh_ai:
@@ -239,7 +249,7 @@ def search_company():
                 res["cached"] = True
                 res["cache_level"] = "L1_DATABASE"
                 res["search_id"] = cached_search.id
-                res["processos"] = [p.to_dict() for p in cached_search.processes]
+                res["processos"] = proc_dicts
                 res["parecer_agente_adk"] = res.get("ai_analysis", {})
                 return jsonify(res), 200
         except Exception as db_err:
@@ -473,9 +483,16 @@ def get_search_detail(search_id: int):
     """Retorna os dados detalhados e a lista de processos de uma análise específica."""
     try:
         search = CompanySearch.query.get_or_404(search_id)
+        proc_dicts = [p.to_dict() for p in search.processes]
         result = search.to_dict()
         result["empresa"] = search.company_name
-        result["processos"] = [p.to_dict() for p in search.processes]
+        result["processos"] = proc_dicts
+        if proc_dicts:
+            fresh_metrics = orchestrator.predictor.generate_dashboard_metrics(
+                search.company_name, proc_dicts
+            )
+            result["plus_previsao_condenacao"] = fresh_metrics["plus_previsao_condenacao"]
+            result["score_risco_terceirizacao"] = fresh_metrics["score_risco_terceirizacao"]
         result["parecer_agente_adk"] = result.get("ai_analysis", {})
         return jsonify(result), 200
     except Exception as exc:
