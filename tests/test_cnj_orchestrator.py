@@ -47,7 +47,7 @@ def test_orchestrator_multi_subject_and_no_keyerror():
 
     with patch.object(orchestrator, "_fetch_comunica_pje", return_value={"mock": True}):
         with patch.object(orchestrator, "_enrich_with_datajud", return_value=mock_processes):
-            result = orchestrator.analyze_company_by_name("Empresa Multi Assunto")
+            result = orchestrator.analyze_company_by_name("EMPRESA MULTI ASSUNTO")
 
             assert result["total_processos"] == 3
             assert result["desfechos_sentencas"]["condenacoes"] == 1
@@ -89,3 +89,25 @@ def test_datajud_failure_keeps_processes_found_by_comunica():
     assert len(result) == 1
     assert result[0]["numero_processo"] == "00001234520235020001"
     assert result[0]["sentence_outcome"] == "em_aberto"
+
+
+def test_orchestrator_fictional_company_returns_empty():
+    """
+    Garante que empresas fictícias que não existem no Comunica PJe e DataJud
+    retornem respostas vazias (zero processos) e não quebrem a aplicação.
+    """
+    orchestrator = CNJMetadataOrchestrator()
+    
+    # Mockando a resposta do Comunica PJe para retornar nenhum item (empresa não existe)
+    mock_response = MagicMock(ok=True)
+    mock_response.json.return_value = {"items": []}
+    
+    with patch.object(orchestrator.session, "get", return_value=mock_response):
+        result = orchestrator.analyze_company_by_name("EMPRESA FICTICIA INEXISTENTE LTDA")
+        
+        # O resultado não deve quebrar e deve retornar tudo zerado/vazio
+        assert result["total_processos"] == 0
+        assert result["ranking_motivos"] == []
+        assert result["desfechos_sentencas"]["condenacoes"] == 0
+        assert result["desfechos_sentencas"]["em_aberto"] == 0
+        assert result["plus_previsao_condenacao"] == []
