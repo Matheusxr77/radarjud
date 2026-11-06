@@ -6,10 +6,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-radarjud}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-radarjud_secret_pass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
       POSTGRES_DB: ${POSTGRES_DB:-radarjud}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -35,14 +35,14 @@ services:
       FLASK_APP: run.py
       DEBUG: ${DEBUG:-True}
       PORT: 5000
-      SECRET_KEY: ${SECRET_KEY:-lexguard-secret-key-change-in-production}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-radarjud}:${POSTGRES_PASSWORD:-radarjud_secret_pass}@db:5432/${POSTGRES_DB:-radarjud}
+      SECRET_KEY: ${SECRET_KEY:-change_me_in_production}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-radarjud}:${POSTGRES_PASSWORD:-change_me}@db:5432/${POSTGRES_DB:-radarjud}
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-radarjud}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-radarjud_secret_pass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
       POSTGRES_DB: ${POSTGRES_DB:-radarjud}
-      DATAJUD_API_KEY: ${DATAJUD_API_KEY:-cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw==}
+      DATAJUD_API_KEY: ${DATAJUD_API_KEY:-}
       DATAJUD_BASE_URL: ${DATAJUD_BASE_URL:-https://api-publica.datajud.cnj.jus.br}
       COMUNICA_PJE_URL: ${COMUNICA_PJE_URL:-https://comunicaapi.pje.jus.br/api/v1/comunicacao}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-20}
@@ -61,4 +61,3 @@ volumes:
 networks:
   radarjud_net:
     driver: bridge
-

@@ -31,7 +31,7 @@ class CNJClient:
         )
         self.datajud_api_key = datajud_api_key or os.getenv(
             "DATAJUD_API_KEY",
-            "cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw==",
+            "",
         )
         self.timeout = timeout
 
