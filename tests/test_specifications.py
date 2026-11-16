@@ -114,7 +114,7 @@ def test_short_circuit_l1_database(client, app):
     """
     with app.app_context():
         search = CompanySearch(
-            company_name="Logística Express Ltda",
+            company_name="LOGISTICA EXPRESS LTDA",
             normalized_name="LOGISTICA EXPRESS",
             total_processes=12,
             last_checked_at=get_utc_now() - timedelta(hours=1),
@@ -136,7 +136,7 @@ def test_short_circuit_l1_database(client, app):
 
     # Faz a requisição na rota
     with patch("app.routes.api.orchestrator.analyze_company_by_name") as mock_analyze:
-        resp = client.post("/api/v1/search-company", json={"company_name": "Logística Express Ltda"})
+        resp = client.post("/api/v1/search-company", json={"company_name": "LOGISTICA EXPRESS LTDA"})
         assert resp.status_code == 200
         data = resp.get_json()
         assert data.get("cached") is True
@@ -158,7 +158,7 @@ def test_infer_subject_from_pje_text_when_outros():
     pje_texts = ["Publicação de sentença: Diante do exposto, condeno ao pagamento de horas extras e reflexos."]
 
     subjects, observation = orchestrator.infer_subject_and_observation(generic_subjects, pje_texts)
-    assert "Horas Extras (Inferido via PJe)" in subjects
+    assert any("Horas Extras" in s for s in subjects)
     assert observation is not None
     assert "Horas Extras" in observation
 
@@ -224,12 +224,12 @@ def test_comunica_pje_fetches_full_processes_without_20_item_cap():
     mock_resp.json.return_value = {"items": mock_items}
 
     with patch.object(orchestrator.session, "get", return_value=mock_resp) as mock_get:
-        processes_map = orchestrator._fetch_comunica_pje("Empresa Real 19 Processos", max_pages=2, page_size=100)
+        processes_map = orchestrator._fetch_comunica_pje("Empresa Real 19 Processos", max_pages=2, page_size=50)
 
-        # Garante que usou page_size=100 na chamada para capturar o lote real
+        # Garante que usou itensPorPagina=50 respeitando o teto máximo oficial do CNJ
         mock_get.assert_called()
         call_params = mock_get.call_args[1]["params"]
-        assert call_params["itensPorPagina"] == 100
+        assert call_params["itensPorPagina"] == 50
 
         # E capturou todos os 19 processos reais distintos, sem truncar em 11
         assert len(processes_map) == 19

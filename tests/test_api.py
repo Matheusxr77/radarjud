@@ -19,16 +19,15 @@ def test_search_company_validation(client):
 
 
 @pytest.mark.parametrize("invalid_input", [
-    "banco bradesco",        # Apenas letras minúsculas (falha no caps lock/formatação)
     "EMPRESA@!!!",           # Caracteres especiais/apenas símbolos
     "123",                   # Número que não é CNPJ
     "   ",                   # String vazia com espaços
-    "Nome Incompleto S/A"    # Formatação mista não normalizada
+    "!",                     # Símbolo único
 ])
-def test_search_company_invalid_parse_and_caps_lock(client, invalid_input):
+def test_search_company_invalid_parse_and_symbols(client, invalid_input):
     """
-    Garante que entradas mal formatadas, sem Caps Lock ou que não passem no parse
-    de CNPJ/Razão Social sejam rejeitadas com a mensagem de erro específica.
+    Garante que entradas mal formatadas, sequências numéricas que não são CNPJ
+    ou símbolos proibidos sejam rejeitadas com a mensagem de erro específica.
     """
     response = client.post("/api/v1/search-company", json={"company_name": invalid_input})
     
@@ -39,15 +38,16 @@ def test_search_company_invalid_parse_and_caps_lock(client, invalid_input):
     assert data["error"] == "empresas so são pesquisadas por razão social ou CNPJ"
 
 
-def test_search_company_accepts_only_cnpj_and_razao_social(client):
+def test_search_company_accepts_names_and_cnpj(client):
     """
-    Garante que a API aceita um CNPJ válido (com ou sem pontuação)
-    e uma Razão Social válida (tudo em Caps Lock).
+    Garante que a API aceita busca por nome comum/fantasia (ex: 'Picpay', 'banco bradesco'),
+    razão social formal e CNPJ (com ou sem pontuação).
     """
     mock_metrics = {
-        "empresa": "EMPRESA VALIDA LTDA",
+        "empresa": "EMPRESA TESTE",
         "total_processos": 1,
         "ranking_motivos": [],
+        "ranking_motivos_condenacao": [],
         "desfechos_sentencas": {},
         "niveis_sigilo": {},
         "plus_previsao_condenacao": []
@@ -58,9 +58,17 @@ def test_search_company_accepts_only_cnpj_and_razao_social(client):
         resp_cnpj = client.post("/api/v1/search-company", json={"company_name": "12.345.678/0001-90"})
         assert resp_cnpj.status_code == 200
 
-        # Teste 2: Razão Social Válida (Caps Lock)
+        # Teste 2: Razão Social Formal
         resp_razao = client.post("/api/v1/search-company", json={"company_name": "EMPRESA VALIDA LTDA"})
         assert resp_razao.status_code == 200
+
+        # Teste 3: Nome Fantasia / Nome Comum com maiúscula inicial (ex: Picpay)
+        resp_picpay = client.post("/api/v1/search-company", json={"company_name": "Picpay"})
+        assert resp_picpay.status_code == 200
+
+        # Teste 4: Nome em minúsculas (ex: banco bradesco)
+        resp_lower = client.post("/api/v1/search-company", json={"company_name": "banco bradesco"})
+        assert resp_lower.status_code == 200
 
 
 def test_search_company_mocked_pipeline(client):
@@ -93,3 +101,32 @@ def test_search_company_mocked_pipeline(client):
         assert data["total_processos"] == 5
         assert len(data["ranking_motivos"]) == 1
         assert "plus_previsao_condenacao" in data
+
+
+def test_clear_search_history_endpoint(client, app):
+    """Garante que a rota DELETE /api/v1/history limpa todas as buscas salvas no banco."""
+    from app.extensions import db
+    from app.models.company_search import CompanySearch
+    from app.models.process_record import ProcessRecord
+
+    with app.app_context():
+        # Cria registros simulados
+        s = CompanySearch(company_name="EMPRESA TESTE DELETE", normalized_name="EMPRESA TESTE DELETE")
+        db.session.add(s)
+        db.session.commit()
+
+        p = ProcessRecord(company_search_id=s.id, numero_processo="12345678901234567890")
+        db.session.add(p)
+        db.session.commit()
+
+        assert CompanySearch.query.count() >= 1
+
+        # Deleta via endpoint
+        resp = client.delete("/api/v1/history")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "success"
+
+        # Confirma que foi limpo
+        assert CompanySearch.query.count() == 0
+        assert ProcessRecord.query.count() == 0

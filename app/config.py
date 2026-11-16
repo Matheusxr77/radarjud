@@ -12,9 +12,17 @@ def _database_url() -> str:
     if configured_url:
         for driver in ("postgresql+psycopg://", "postgresql://"):
             if configured_url.startswith(driver):
-                return configured_url.replace(
+                configured_url = configured_url.replace(
                     driver, "postgresql+psycopg2://", 1
                 )
+        # Se a URL aponta para o host 'db' (Docker) e estamos rodando fora do Docker (sem resolver 'db')
+        if "@db:" in configured_url or "@db/" in configured_url:
+            import socket
+            try:
+                socket.gethostbyname("db")
+            except Exception:
+                db_file = BASE_DIR / "radarjud.db"
+                return f"sqlite:///{db_file}"
         return configured_url
 
     return (
@@ -47,7 +55,7 @@ class Config:
     }
 
     # APIs Públicas Oficiais do Judiciário
-    DATAJUD_API_KEY = os.getenv("DATAJUD_API_KEY", "")
+    DATAJUD_API_KEY = os.getenv("DATAJUD_API_KEY") or "cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw=="
     DATAJUD_BASE_URL = os.getenv("DATAJUD_BASE_URL", "https://api-publica.datajud.cnj.jus.br")
     COMUNICA_PJE_URL = os.getenv("COMUNICA_PJE_URL", "https://comunicaapi.pje.jus.br/api/v1/comunicacao")
 
