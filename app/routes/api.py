@@ -111,7 +111,7 @@ def _deep_scan_background_worker(
                         return
 
             logger.info("Iniciando Deep Scan em segundo plano para search_id=%d (%s)...", search_id, company_name)
-            search = CompanySearch.query.get(search_id)
+            search = db.session.get(CompanySearch, search_id)
             if not search:
                 return
 
@@ -159,7 +159,7 @@ def _deep_scan_background_worker(
                                 if c not in all_processes_map[cnj].get("classes_pje", []):
                                     all_processes_map[cnj].setdefault("classes_pje", []).append(c)
 
-                    s = CompanySearch.query.get(search_id)
+                    s = db.session.get(CompanySearch, search_id)
                     if s:
                         s.total_processes = len(all_processes_map)
                         s.last_checked_at = get_utc_now()
@@ -197,7 +197,7 @@ def _deep_scan_background_worker(
 
             # 2. Consolidação de Capital Social de todas as filiais e unidades vinculadas
             brand_term_clean = strat.get("comunica_query_term") or clean_brand
-            cnpjs_found = set(discover_company_cnpjs(company_name, brand_term_clean, all_processes_map))
+            cnpjs_found = set(discover_company_cnpjs(company_name, brand_term_clean, all_processes_map, search_strategy=strat))
             for ent in scan_res.get("discovered_entities", []):
                 if is_cnpj(ent):
                     cnpjs_found.add(re.sub(r"\D", "", ent))
@@ -234,17 +234,22 @@ def _deep_scan_background_worker(
                 discovered_entities=list(cnpjs_found),
                 search_strategy=strat,
             )
-            deep_results["logo"] = deep_results["idoneidade_economica"].get("logo", {})
-            if deep_results["idoneidade_economica"].get("indice_exposicao_financeira") is not None:
-                deep_results["indice_exposicao_financeira"] = deep_results["idoneidade_economica"]["indice_exposicao_financeira"]
-                deep_results["score_risco_terceirizacao"] = deep_results["idoneidade_economica"]["indice_exposicao_financeira"]
-                deep_results["overall_risk_score"] = deep_results["idoneidade_economica"]["indice_exposicao_financeira"]
+            econ = deep_results["idoneidade_economica"]
+            deep_results["logo"] = econ.get("logo", {})
+            if econ.get("indice_exposicao_financeira") is not None:
+                deep_results["indice_exposicao_financeira"] = econ["indice_exposicao_financeira"]
+                deep_results["score_risco_terceirizacao"] = econ["indice_exposicao_financeira"]
+                deep_results["overall_risk_score"] = econ["indice_exposicao_financeira"]
+            deep_results["capital_social_consolidado"] = econ.get("valor_formatado") or econ.get("capital_social_formatado") or cap_display.get("valor_formatado")
+            deep_results["unidades_consolidadas"] = econ.get("unidades_consolidadas") or cap_display.get("unidades_consolidadas", 1)
+            deep_results["observacao_porte"] = econ.get("observacao_porte") or cap_display.get("observacao_porte", "")
+            deep_results["capital_social_display"] = econ.get("capital_social_display") or cap_display
 
             deep_results["ai_analysis"] = orchestrator.ai_analyzer.analyze_company(deep_results)
             deep_results["parecer_agente_adk"] = deep_results["ai_analysis"]
 
             # 5. Atualização e persistência no banco (Garante métricas completas com prioridade)
-            search = CompanySearch.query.get(search_id)
+            search = db.session.get(CompanySearch, search_id)
             if not search:
                 return
 
@@ -309,7 +314,7 @@ def _deep_scan_background_worker(
             db.session.rollback()
             logger.exception("Erro no Deep Scan em background (search_id=%d): %s", search_id, exc)
             try:
-                search = CompanySearch.query.get(search_id)
+                search = db.session.get(CompanySearch, search_id)
                 if search:
                     search.scan_status = "COMPLETED"
                     db.session.commit()
@@ -700,7 +705,9 @@ def get_search_status(search_id: int):
     Permite verificar se o Deep Scan em segundo plano já completou a paginação.
     """
     try:
-        search = CompanySearch.query.get_or_404(search_id)
+        search = db.session.get(CompanySearch, search_id)
+        if not search:
+            return jsonify({"error": "Registro não encontrado."}), 404
         is_completed = search.scan_status == "COMPLETED"
         response = {
             "search_id": search.id,
@@ -765,7 +772,9 @@ def incremental_sync(search_id: int):
     dataHoraUltimaAtualizacao > cached_search.last_checked_at.
     """
     try:
-        search = CompanySearch.query.get_or_404(search_id)
+        search = db.session.get(CompanySearch, search_id)
+        if not search:
+            return jsonify({"error": "Registro não encontrado."}), 404
         since_date = search.last_checked_at.isoformat() if search.last_checked_at else None
 
         processes_map = orchestrator._fetch_comunica_pje(search.company_name, max_pages=2, page_size=50)
@@ -873,7 +882,9 @@ def get_search_detail(search_id: int):
     """
     if request.method == "DELETE":
         try:
-            search = CompanySearch.query.get_or_404(search_id)
+            search = db.session.get(CompanySearch, search_id)
+            if not search:
+                return jsonify({"error": "Registro não encontrado."}), 404
             db.session.delete(search)
             db.session.commit()
             logger.info("Registro search_id=%d removido pelo usuário.", search_id)
@@ -886,7 +897,9 @@ def get_search_detail(search_id: int):
             logger.error("Erro ao deletar search_id %d: %s", search_id, exc)
             return jsonify({"error": "Falha ao remover o registro."}), 500
     try:
-        search = CompanySearch.query.get_or_404(search_id)
+        search = db.session.get(CompanySearch, search_id)
+        if not search:
+            return jsonify({"error": "Registro não encontrado."}), 404
         proc_dicts = [p.to_dict() for p in search.processes]
         result = search.to_dict()
         result["empresa"] = search.company_name

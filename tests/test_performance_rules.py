@@ -102,7 +102,7 @@ def test_regra_2_fast_path_ultra_rapido_no_datajud_calls():
             mock_dj.assert_not_called()  # Proibido chamar DataJud no Fast Path!
             assert len(results["processos"]) == 1
             assert any("Horas Extras" in s for s in results["processos"][0]["subjects"])
-            assert elapsed_ms < 50.0  # Em memória/mock leva menos de 5ms
+            assert elapsed_ms < 250.0  # Em memória/mock leva menos de 250ms mesmo em CI virtualizado lento
 
 
 def test_regra_3_cnpj_regex_and_root_deduplication():

@@ -212,6 +212,7 @@ SPECIAL_DOMAINS: Dict[str, str] = {
     "CORREIOS": "correios.com.br",
     "EMBRATEL": "embratel.com.br",
     "PICPAY": "picpay.com",
+    "PICPY": "picpay.com",
     "ITAU": "itau.com.br",
     "BRADESCO": "bradesco.com.br",
     "SANTANDER": "santander.com.br",
@@ -285,6 +286,10 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
             if k == norm_name or (len(k) >= 3 and (norm_name.startswith(k + " ") or norm_name == k or (len(k) >= 4 and k in norm_name))):
                 domain = v
                 break
+        if not domain and len(norm_name) >= 4:
+            matches = difflib.get_close_matches(norm_name, list(SPECIAL_DOMAINS.keys()), n=1, cutoff=0.75)
+            if matches:
+                domain = SPECIAL_DOMAINS[matches[0]]
 
     # 2. Domínio do e-mail cadastral da Receita Federal
     if not domain and email_rfb and "@" in email_rfb:
@@ -381,6 +386,15 @@ def _get_next_provider_order() -> List[str]:
     return providers[idx:] + providers[:idx]
 
 
+def _extract_porte_str(raw_porte: Any) -> str:
+    """Garante que a extração do porte retorne estritamente str (ex: 'DEMAIS', 'ME', 'EPP')."""
+    if isinstance(raw_porte, dict):
+        return str(raw_porte.get("descricao") or raw_porte.get("texto") or "DEMAIS").strip().upper()
+    if isinstance(raw_porte, str) and raw_porte.strip():
+        return raw_porte.strip().upper()
+    return "DEMAIS"
+
+
 def _fetch_from_brasilapi(digits: str, headers: dict, timeout: float) -> dict:
     try:
         r = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{digits}", headers=headers, timeout=timeout)
@@ -392,7 +406,7 @@ def _fetch_from_brasilapi(digits: str, headers: dict, timeout: float) -> dict:
                 "razao_social": d.get("razao_social") or "",
                 "nome_fantasia": d.get("nome_fantasia") or "",
                 "capital_social": float(d.get("capital_social") or 0.0),
-                "porte": d.get("porte") or d.get("descricao_porte") or "DEMAIS",
+                "porte": _extract_porte_str(d.get("porte") or d.get("descricao_porte")),
                 "situacao": str(d.get("descricao_situacao_cadastral") or "ATIVA").upper(),
                 "email": d.get("email") or "",
                 "qsa_pjs": extract_qsa_pjs(d),
@@ -414,7 +428,7 @@ def _fetch_from_cnpjws(digits: str, headers: dict, timeout: float) -> dict:
                 "razao_social": d.get("razao_social") or "",
                 "nome_fantasia": est.get("nome_fantasia") or "",
                 "capital_social": float(d.get("capital_social") or 0.0),
-                "porte": (d.get("porte") or {}).get("descricao") or "DEMAIS",
+                "porte": _extract_porte_str(d.get("porte") or est.get("porte")),
                 "situacao": str(est.get("situacao_cadastral") or "ATIVA").upper(),
                 "email": est.get("email") or "",
                 "qsa_pjs": extract_qsa_pjs(d),
@@ -435,7 +449,7 @@ def _fetch_from_minhareceita(digits: str, headers: dict, timeout: float) -> dict
                 "razao_social": d.get("razao_social") or "",
                 "nome_fantasia": d.get("nome_fantasia") or "",
                 "capital_social": float(d.get("capital_social") or 0.0),
-                "porte": d.get("porte") or "DEMAIS",
+                "porte": _extract_porte_str(d.get("porte") or d.get("descricao_porte")),
                 "situacao": str(d.get("descricao_situacao_cadastral") or d.get("situacao_cadastral") or "ATIVA").upper(),
                 "email": d.get("email") or "",
                 "qsa_pjs": extract_qsa_pjs(d),
@@ -462,7 +476,7 @@ def _fetch_from_receitaws(digits: str, headers: dict, timeout: float) -> dict:
                     "razao_social": d.get("nome") or "",
                     "nome_fantasia": d.get("fantasia") or "",
                     "capital_social": cap_val,
-                    "porte": d.get("porte") or "DEMAIS",
+                    "porte": _extract_porte_str(d.get("porte")),
                     "situacao": str(d.get("situacao") or "ATIVA").upper(),
                     "email": d.get("email") or "",
                     "qsa_pjs": extract_qsa_pjs(d),
@@ -613,14 +627,22 @@ def lookup_corporate_directory(user_query: str, brand_term: str = "", mode: str 
     norm_brand = normalize_ascii(brand_no_parens)
     clean_brand = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", norm_brand)).strip()
 
-    # 1. Modo Estrito de Razão Social: tenta correspondência da chave mais específica/longa primeiro
+    # Normaliza termos de grupo
+    for kw in ["GRUPO CONSOLIDADO", "FILIAIS", "MATRIZ E FILIAIS", "MATRIZ"]:
+        clean_q = re.sub(rf"\b{kw}\b", "", clean_q).strip()
+        clean_brand = re.sub(rf"\b{kw}\b", "", clean_brand).strip()
+
+    # 1. Modo Estrito de Razão Social: se especificado e não for grupo amplo, busca correspondência
     if mode in ("STRICT_RAZAO", "STRICT_CNPJ"):
         sorted_keys = sorted(OFFICIAL_CORPORATE_CNPJ_DIRECTORY.keys(), key=len, reverse=True)
         for k in sorted_keys:
-            if k == clean_q or (len(k) >= 4 and k in clean_q) or k == clean_brand or (len(k) >= 4 and k in clean_brand):
-                return [OFFICIAL_CORPORATE_CNPJ_DIRECTORY[k][0]]
+            if k == clean_q or k == clean_brand:
+                return OFFICIAL_CORPORATE_CNPJ_DIRECTORY[k]
+            if len(k) >= 4 and (k in clean_q or k in clean_brand):
+                # Se for a marca do grupo principal, retorna os CNPJs do grupo
+                return OFFICIAL_CORPORATE_CNPJ_DIRECTORY[k]
 
-    # 2. Modo BROAD_BRAND: busca exata pela marca ou query
+    # 2. Modo BROAD_BRAND / Geral: busca exata pela marca ou query
     if clean_brand in OFFICIAL_CORPORATE_CNPJ_DIRECTORY:
         return OFFICIAL_CORPORATE_CNPJ_DIRECTORY[clean_brand]
 
@@ -641,7 +663,7 @@ def lookup_corporate_directory(user_query: str, brand_term: str = "", mode: str 
     all_keys = list(OFFICIAL_CORPORATE_CNPJ_DIRECTORY.keys())
     for target in (clean_brand, clean_q):
         if len(target) >= 4:
-            matches = difflib.get_close_matches(target, all_keys, n=1, cutoff=0.8)
+            matches = difflib.get_close_matches(target, all_keys, n=1, cutoff=0.75)
             if matches:
                 return OFFICIAL_CORPORATE_CNPJ_DIRECTORY[matches[0]]
 
@@ -818,8 +840,14 @@ def extract_and_discover_all_group_cnpjs(
                 root_to_main_cnpj[mat[:8]] = mat
                 all_distinct_branch_cnpjs.add(mat)
 
-    # No modo STRICT_RAZAO, se houver target_cnpj ou achamos raízes, retemos apenas a primeira raiz
-    if mode == "STRICT_RAZAO" and root_to_main_cnpj:
+    # No modo STRICT_RAZAO (sem consolidação de grupo), se houver target_cnpj ou achamos raízes, retemos apenas a primeira raiz
+    is_group_search = (
+        (search_strategy or {}).get("is_broad_brand")
+        or (search_strategy or {}).get("aggregate_all_branches")
+        or "GRUPO CONSOLIDADO" in (user_query or "").upper()
+        or "FILIAIS" in (user_query or "").upper()
+    )
+    if mode == "STRICT_RAZAO" and root_to_main_cnpj and not is_group_search:
         first_cnpj = list(root_to_main_cnpj.values())[0]
         return [first_cnpj], 1
 
@@ -855,9 +883,62 @@ def compute_calibrated_exposure_and_solvency(
 
     # Estimativa de passivo em aberto (ticket médio trabalhista R$ 25.000)
     estimated_liability = max(1.0, total_processes * 25_000.0)
-    coverage_ratio = total_capital_num / estimated_liability
+    coverage_ratio = (total_capital_num / estimated_liability) if total_capital_num > 0 else 0.0
 
-    # 1. Probabilidade de Insolvência Econômica (JAMAIS usar 75% para empresa solvente!)
+    # 1. Tratamento específico quando o Capital Social é 0 (ou ainda em consolidação cadastral)
+    if total_capital_num <= 0:
+        if total_processes == 0:
+            prob_insolvencia = 5.0
+            solvency_damping_factor = 0.20
+            risco_subsidiario = 0.0
+            calibrated_exposure_score = 5.0
+            cenario_tipo = "CENARIO_A"
+            cenario_badge = "Cenário A · Sem Passivo Identificado"
+            cenario_titulo = "Cenário A: Idoneidade Econômica Preservada • Sem Registros Processuais"
+            cenario_descricao = (
+                "Nenhum processo trabalhista ou condenação foi localizado nas bases públicas oficiais do Judiciário (CNJ). "
+                "Como não há litígios cadastrados, o risco de exposição ou redirecionamento subsidiário ao tomador de serviços é inexistente."
+            )
+        elif total_processes <= 5:
+            prob_insolvencia = 20.0
+            solvency_damping_factor = 0.50
+            calibrated_exposure_score = round(min(95.0, max(5.0, raw_conviction_prob_pct * solvency_damping_factor)), 1)
+            risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
+            cenario_tipo = "CENARIO_A"
+            cenario_badge = "Cenário A · Baixo Volume Processual"
+            cenario_titulo = "Cenário A: Idoneidade Econômica • Volume Processual Reduzido"
+            cenario_descricao = (
+                f"A empresa apresenta situação cadastral {sit_upper} e reduzido volume processual ({total_processes} processo(s)). "
+                f"Com capital em consolidação cadastral, o risco subsidiário estimado é baixo ({risco_subsidiario:.1f}%) pela baixa litigiosidade."
+            )
+        else:
+            prob_insolvencia = 65.0
+            solvency_damping_factor = 0.95
+            calibrated_exposure_score = round(min(95.0, max(5.0, raw_conviction_prob_pct * solvency_damping_factor)), 1)
+            risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
+            cenario_tipo = "CENARIO_B"
+            cenario_badge = "Cenário B · Capital Não Localizado"
+            cenario_titulo = "Cenário B: Risco Subsidiário • Capital Social Não Localizado"
+            cenario_descricao = (
+                f"ALERTA: A empresa responde a {total_processes} processos mas não teve Capital Social localizado para cobrir eventuais "
+                f"execuções trabalhistas. Risco elevado de redirecionamento subsidiário ({risco_subsidiario:.1f}%) caso não comprove lastro patrimonial."
+            )
+        return {
+            "probabilidade_condenacao_bruta": round(raw_conviction_prob_pct, 1),
+            "indice_exposicao_financeira": calibrated_exposure_score,
+            "probabilidade_insolvencia": prob_insolvencia,
+            "probabilidade_insolvencia_pct": prob_insolvencia,
+            "risco_exposicao_subsidiaria": risco_subsidiario,
+            "risco_calote_subsidiario": risco_subsidiario,
+            "risco_calote_subsidiario_pct": risco_subsidiario,
+            "situacao_cadastral": "ATIVA" if is_active else sit_upper,
+            "cenario_tipo": cenario_tipo,
+            "cenario_badge": cenario_badge,
+            "cenario_titulo": cenario_titulo,
+            "cenario_descricao": cenario_descricao,
+        }
+
+    # 2. Empresas com Capital Social comprovado (> R$ 0,00)
     if not is_active and total_capital_num < 50_000:
         prob_insolvencia = 75.0
         solvency_damping_factor = 1.00   # Sem amortecimento (risco total)
@@ -882,30 +963,36 @@ def compute_calibrated_exposure_and_solvency(
         prob_insolvencia = 65.0
         solvency_damping_factor = 0.95
 
-    # 2. Score de Exposição Financeira Ajustado pelo Capital Social (Card 1 do Topo):
-    # Combina o risco processual com a capacidade de absorção financeira da empresa,
-    # evitando que bancos de R$ 120 Bilhões apareçam com "90,8%" em vermelho crítico no topo!
+    # Score de Exposição Financeira Ajustado pelo Capital Social (Card 1 do Topo)
     calibrated_exposure_score = round(
         min(95.0, max(5.0, raw_conviction_prob_pct * solvency_damping_factor)), 1
     )
 
-    # 3. Risco de Exposição Subsidiária / Calote (Card inferior): P(Condenação Bruta) * P(Insolvência)
+    # Risco de Exposição Subsidiária / Calote (Card inferior): P(Condenação Bruta) * P(Insolvência)
     risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
 
     formatted_capital = f"R$ {total_capital_num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-    # 4. Cenário A (Verde) vs Cenário B (Vermelho)
+    # Cenário A (Verde) vs Cenário B (Vermelho)
     if prob_insolvencia <= 25.0:
         cenario_tipo = "CENARIO_A"
         cenario_badge = "Cenário A · Solvência Comprovada"
-        cenario_titulo = "Cenário A: Idoneidade Econômica Robusta • Risco de Calote Subsidiário Mitigado"
-        cenario_descricao = (
-            f"BAIXO RISCO DE REDIRECIONAMENTO SUBSIDIÁRIO: A empresa apresenta situação cadastral ATIVA e "
-            f"Capital Social consolidado de {formatted_capital}. Com probabilidade de insolvência "
-            f"estimada em apenas {prob_insolvencia:.1f}% e taxa histórica de desfecho processual de {raw_conviction_prob_pct:.1f}%, "
-            f"a própria empresa possui amplo lastro patrimonial para quitar eventuais condenações sem transferir passivo "
-            f"ao contratante (Risco de Exposição Subsidiária de apenas {risco_subsidiario:.1f}%)."
-        )
+        if total_processes == 0:
+            cenario_titulo = "Cenário A: Idoneidade Econômica Robusta • Sem Passivo Judicial"
+            cenario_descricao = (
+                f"BAIXO RISCO DE REDIRECIONAMENTO SUBSIDIÁRIO: A empresa apresenta situação cadastral ATIVA e "
+                f"Capital Social consolidado de {formatted_capital}. Não foram identificados processos judiciais ou "
+                f"condenações nas bases consultadas, garantindo plena segurança ao tomador de serviços."
+            )
+        else:
+            cenario_titulo = "Cenário A: Idoneidade Econômica Robusta • Risco de Calote Subsidiário Mitigado"
+            cenario_descricao = (
+                f"BAIXO RISCO DE REDIRECIONAMENTO SUBSIDIÁRIO: A empresa apresenta situação cadastral ATIVA e "
+                f"Capital Social consolidado de {formatted_capital}. Com probabilidade de insolvência "
+                f"estimada em apenas {prob_insolvencia:.1f}% e taxa histórica de desfecho processual de {raw_conviction_prob_pct:.1f}%, "
+                f"a própria empresa possui amplo lastro patrimonial para quitar eventuais condenações sem transferir passivo "
+                f"ao contratante (Risco de Exposição Subsidiária de apenas {risco_subsidiario:.1f}%)."
+            )
     else:
         cenario_tipo = "CENARIO_B"
         cenario_badge = "Cenário B · Risco Crítico"

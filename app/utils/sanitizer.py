@@ -218,7 +218,14 @@ def classify_search_mode(raw_query: str) -> str:
     if len(clean_digits) == 14 and (raw_query.strip().isdigit() or all(c in "0123456789./- " for c in raw_query.strip())):
         return "STRICT_CNPJ"
 
-    cleaned_text = (raw_query or "").strip().upper()
+    raw_upper = (raw_query or "").strip().upper()
+
+    # Se já é um título consolidado gerado pelo sistema ou o usuário especificou grupo/filiais
+    if "GRUPO CONSOLIDADO" in raw_upper or "FILIAIS" in raw_upper or "MATRIZ / FILIAIS" in raw_upper:
+        return "BROAD_BRAND"
+
+    # Remove conteúdo entre parênteses para avaliar o nome base
+    cleaned_text = re.sub(r"\(.*?\)", "", raw_upper).strip()
 
     # Se contém sufixos societários explícitos ou termos jurídicos fortes
     if CORPORATE_SUFFIX_REGEX.search(cleaned_text):
