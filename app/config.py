@@ -10,7 +10,7 @@ load_dotenv(BASE_DIR / ".env")
 def _database_url() -> str:
     configured_url = os.getenv("DATABASE_URL", "").strip()
     if configured_url:
-        for driver in ("postgresql+psycopg://", "postgresql://"):
+        for driver in ("postgresql+psycopg://", "postgresql://", "postgres://"):
             if configured_url.startswith(driver):
                 configured_url = configured_url.replace(
                     driver, "postgresql+psycopg2://", 1
