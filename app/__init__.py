@@ -59,7 +59,11 @@ def create_app(config_name: str = None) -> Flask:
                     conn.execute(db.text("ALTER TABLE company_searches ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"))
                     conn.execute(db.text("ALTER TABLE company_searches ADD COLUMN IF NOT EXISTS scan_status VARCHAR(20) DEFAULT 'COMPLETED';"))
                     conn.execute(db.text("ALTER TABLE company_searches ADD COLUMN IF NOT EXISTS ai_analysis JSON;"))
+                    conn.execute(db.text("ALTER TABLE company_searches ADD COLUMN IF NOT EXISTS economic_standing JSON;"))
+                    conn.execute(db.text("ALTER TABLE company_searches ADD COLUMN IF NOT EXISTS ranking_motivos_condenacao JSON;"))
                     conn.execute(db.text("ALTER TABLE process_records ADD COLUMN IF NOT EXISTS observation VARCHAR(500);"))
+                    conn.execute(db.text("ALTER TABLE process_records ALTER COLUMN grau TYPE VARCHAR(50);"))
+                    conn.execute(db.text("ALTER TABLE process_records ALTER COLUMN tribunal TYPE VARCHAR(50);"))
                     conn.commit()
         except Exception as exc:
             app.logger.warning("Não foi possível conectar imediatamente ao PostgreSQL para db.create_all(): %s", exc)

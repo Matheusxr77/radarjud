@@ -1,9 +1,13 @@
+import re
 import sys
+import time
+import uuid
 import asyncio
 import logging
+import threading
 from pathlib import Path
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy import text
 
@@ -11,10 +15,51 @@ from app.extensions import db
 from app.models.company_search import CompanySearch, get_utc_now
 from app.models.process_record import ProcessRecord
 from app.services.orchestrator import CNJMetadataOrchestrator
-from app.utils.sanitizer import sanitize_company_name, is_cnpj, fetch_cnpj_brasilapi
+from app.services.economic_service import (
+    EconomicStandingService,
+    aggregate_group_capital,
+    resolve_company_logo,
+    discover_company_cnpjs,
+    build_capital_social_display,
+)
+from app.utils.sanitizer import (
+    sanitize_company_name,
+    extract_brand_search_term,
+    is_cnpj,
+    fetch_cnpj_brasilapi,
+    is_valid_company_search_input,
+    classify_search_mode,
+    resolve_search_strategy,
+    CORPORATE_SUFFIX_REGEX,
+)
 from app.utils.crypto import generate_movements_hash
 
 logger = logging.getLogger(__name__)
+
+# REGRA 4 e 5: Cache em Memória com TTL de 15 minutos e Regex instantâneo de CNPJ
+CNPJ_REGEX = re.compile(r"\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b")
+SEARCH_CACHE = {}  # {brand_term.upper(): (timestamp, dict_result)}
+CACHE_TTL = 900    # 15 minutos
+
+ACTIVE_SEARCH_LOCK = threading.Lock()
+ACTIVE_SEARCH_JOB_ID = None
+CANCELLED_JOB_IDS = set()
+
+
+def fast_extract_cnpjs_from_texts(processes_dict: dict) -> list:
+    """Extrai CNPJs únicos por raiz (8 primeiros dígitos) diretamente dos textos do Comunica PJe em 1ms."""
+    seen_roots = {}
+    for proc in processes_dict.values():
+        for txt in proc.get("publicacoes_texto", []):
+            for match in CNPJ_REGEX.findall(str(txt)):
+                digits = re.sub(r"\D", "", match)
+                if len(digits) == 14:
+                    root = digits[:8]
+                    if root not in seen_roots:
+                        seen_roots[root] = digits
+                        if len(seen_roots) >= 3:
+                            return list(seen_roots.values())
+    return list(seen_roots.values())
 
 # Integração com radarjusAgent (Google ADK + Vertex AI)
 RADARJUS_AGENT_DIR = Path(__file__).resolve().parents[2] / "radarjusAgent"
@@ -33,18 +78,38 @@ except Exception as _agent_exc:
 
 api_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 orchestrator = CNJMetadataOrchestrator()
+economic_service = EconomicStandingService()
 
 # Pool dedicado para tarefas assíncronas em segundo plano (Deep Scan)
 background_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="radarjus_bg_worker")
 
 
-def _deep_scan_background_worker(app, search_id: int, company_name: str):
+def _deep_scan_background_worker(
+    app,
+    search_id: int,
+    company_name: str,
+    search_strategy: dict = None,
+    job_id: str = "",
+    page1_processes: list = None,
+):
     """
-    Worker assíncrono executado em segundo plano para varredura completa (Deep Scan).
-    Pagina todos os processos disponíveis, atualiza estatísticas no banco e marca scan_status='COMPLETED'.
+    Worker assíncrono executado em segundo plano para varredura completa (Deep Scan):
+    1. Verifica cancelamento de jobs antigos para não congestionar a fila.
+    2. Pagina sequencialmente até 15 páginas no Comunica PJe (limite oficial de 50 por página).
+       Critério de parada: len(raw_items) < 50.
+       Callback atualiza s.total_processes no banco progressivamente para o polling no frontend.
+    3. Enriquece os Top 3 Tribunais no DataJud com timeout estrito de 6s.
+    4. Consolida o Capital Social somado de todas as unidades descobertas do grupo.
+    5. Atualiza banco de dados, gera parecer de IA e salva em SEARCH_CACHE (TTL 15 min).
     """
     with app.app_context():
         try:
+            if job_id:
+                with ACTIVE_SEARCH_LOCK:
+                    if job_id in CANCELLED_JOB_IDS:
+                        logger.info("Deep Scan abortado: job_id=%s foi cancelado.", job_id)
+                        return
+
             logger.info("Iniciando Deep Scan em segundo plano para search_id=%d (%s)...", search_id, company_name)
             search = CompanySearch.query.get(search_id)
             if not search:
@@ -53,52 +118,193 @@ def _deep_scan_background_worker(app, search_id: int, company_name: str):
             search.scan_status = "SCANNING_BACKGROUND"
             db.session.commit()
 
-            # Executa varredura profunda completa
-            deep_results = orchestrator.analyze_company_by_name(company_name, fast_path=False)
+            start_ts = time.time()
+            strat = search_strategy or {
+                "comunica_query_term": extract_brand_search_term(company_name, razao_social=company_name),
+                "display_title": company_name,
+                "is_broad_brand": True,
+                "mode": "BROAD_BRAND",
+            }
+            clean_brand = strat.get("comunica_query_term", "")
 
+            all_processes_map = {}
+            if page1_processes:
+                for p in page1_processes:
+                    num = p.get("numero_processo") or p.get("numeroProcesso")
+                    if num:
+                        all_processes_map[num] = {
+                            "numeroProcesso": num,
+                            "numero_processo": num,
+                            "siglaTribunal": p.get("tribunal", ""),
+                            "publicacoes_texto": p.get("publicacoes_texto", []),
+                            "classes_pje": p.get("classes_pje", []),
+                            "is_tst_recurso": p.get("is_tst_recurso", False),
+                        }
+
+            # Callback progressivo para polling no frontend (42 -> 90 -> 180 -> 350 -> 500+)
+            def _on_page_update(page_num: int, accumulated_count: int, current_procs: dict):
+                if job_id:
+                    with ACTIVE_SEARCH_LOCK:
+                        if job_id in CANCELLED_JOB_IDS:
+                            return
+                try:
+                    for cnj, data in (current_procs or {}).items():
+                        if cnj not in all_processes_map:
+                            all_processes_map[cnj] = data
+                        else:
+                            for t in data.get("publicacoes_texto", []):
+                                if t not in all_processes_map[cnj]["publicacoes_texto"]:
+                                    all_processes_map[cnj]["publicacoes_texto"].append(t)
+                            for c in data.get("classes_pje", []):
+                                if c not in all_processes_map[cnj].get("classes_pje", []):
+                                    all_processes_map[cnj].setdefault("classes_pje", []).append(c)
+
+                    s = CompanySearch.query.get(search_id)
+                    if s:
+                        s.total_processes = len(all_processes_map)
+                        s.last_checked_at = get_utc_now()
+                        db.session.commit()
+                except Exception as db_e:
+                    db.session.rollback()
+                    logger.debug("Erro ao atualizar progresso da página %d: %s", page_num, db_e)
+
+            # 1. Paginação padrão até 20 páginas no Comunica PJe (começando da página 2)
+            scan_res = orchestrator.searcher.paginate_comunica_pje_standard(
+                search_strategy=strat,
+                start_page=2,
+                max_pages=20,
+                on_page_callback=_on_page_update,
+                timeout=6.0,
+            )
+
+            # Mescla todos os processos retornados em all_processes_map
+            for cnj, data in scan_res.get("processes", {}).items():
+                if cnj not in all_processes_map:
+                    all_processes_map[cnj] = data
+                else:
+                    for t in data.get("publicacoes_texto", []):
+                        if t not in all_processes_map[cnj]["publicacoes_texto"]:
+                            all_processes_map[cnj]["publicacoes_texto"].append(t)
+                    for c in data.get("classes_pje", []):
+                        if c not in all_processes_map[cnj].get("classes_pje", []):
+                            all_processes_map[cnj].setdefault("classes_pje", []).append(c)
+
+            if job_id:
+                with ACTIVE_SEARCH_LOCK:
+                    if job_id in CANCELLED_JOB_IDS:
+                        logger.info("Deep Scan cancelado antes da consolidação de CNPJ/DataJud: %s", job_id)
+                        return
+
+            # 2. Consolidação de Capital Social de todas as filiais e unidades vinculadas
+            brand_term_clean = strat.get("comunica_query_term") or clean_brand
+            cnpjs_found = set(discover_company_cnpjs(company_name, brand_term_clean, all_processes_map))
+            for ent in scan_res.get("discovered_entities", []):
+                if is_cnpj(ent):
+                    cnpjs_found.add(re.sub(r"\D", "", ent))
+
+            cap_display = build_capital_social_display(list(cnpjs_found), total_processes=len(all_processes_map))
+            capital_info = {
+                "capital_ativo_formatado": cap_display.get("valor_formatado", "R$ 0,00"),
+                "unidades_consolidadas": cap_display.get("unidades_consolidadas", 1),
+                "observacao_porte": cap_display.get("observacao_porte", ""),
+                "capital_social_display": cap_display,
+            }
+
+            # 3. Enriquecimento no DataJud APENAS para os Top 3 Tribunais com timeout de 6s
+            enriched_list = orchestrator.searcher.enrich_top_tribunals_datajud(
+                all_processes_map, max_tribunals=3, timeout=6.0
+            )
+
+            # 4. Métricas e parecer de IA
+            deep_results = orchestrator.predictor.build_dashboard_metrics(
+                company_name=company_name,
+                processes=enriched_list,
+                capital_info=capital_info,
+                scan_status="COMPLETED",
+            )
+            deep_results["empresa"] = company_name
+            deep_results["is_broad_brand"] = strat.get("is_broad_brand", False)
+            deep_results["movements_hash"] = generate_movements_hash(enriched_list)
+            deep_results["processos"] = enriched_list
+
+            deep_results["idoneidade_economica"] = economic_service.evaluate_economic_standing(
+                company_name=company_name,
+                company_processes=enriched_list,
+                p_condenacao_trabalhista=deep_results.get("probabilidade_condenacao_geral_pct") or 0.0,
+                discovered_entities=list(cnpjs_found),
+                search_strategy=strat,
+            )
+            deep_results["logo"] = deep_results["idoneidade_economica"].get("logo", {})
+            if deep_results["idoneidade_economica"].get("indice_exposicao_financeira") is not None:
+                deep_results["indice_exposicao_financeira"] = deep_results["idoneidade_economica"]["indice_exposicao_financeira"]
+                deep_results["score_risco_terceirizacao"] = deep_results["idoneidade_economica"]["indice_exposicao_financeira"]
+                deep_results["overall_risk_score"] = deep_results["idoneidade_economica"]["indice_exposicao_financeira"]
+
+            deep_results["ai_analysis"] = orchestrator.ai_analyzer.analyze_company(deep_results)
+            deep_results["parecer_agente_adk"] = deep_results["ai_analysis"]
+
+            # 5. Atualização e persistência no banco (Garante métricas completas com prioridade)
             search = CompanySearch.query.get(search_id)
             if not search:
                 return
 
-            search.total_processes = deep_results.get("total_processos", search.total_processes)
+            search.total_processes = deep_results.get("total_processos", len(enriched_list))
             search.secrecy_count = sum(
                 qtd for lvl, qtd in deep_results.get("niveis_sigilo", {}).items() if int(lvl) > 0
             )
-            search.secrecy_rate = round(
-                search.secrecy_count / max(search.total_processes, 1), 3
-            )
-            search.outcomes_summary = deep_results.get("desfechos_sentencas", search.outcomes_summary)
-            search.ranking_motivos = deep_results.get("ranking_motivos", search.ranking_motivos)
-            search.predictions_summary = deep_results.get("plus_previsao_condenacao", search.predictions_summary)
-            search.overall_risk_score = deep_results.get("score_risco_terceirizacao", search.overall_risk_score)
-            search.ai_analysis = deep_results.get("ai_analysis", search.ai_analysis)
-            search.movements_hash = deep_results.get("movements_hash", search.movements_hash)
+            search.secrecy_rate = round(search.secrecy_count / max(search.total_processes, 1), 3)
+            search.outcomes_summary = deep_results.get("desfechos_sentencas", {})
+            search.ranking_motivos = deep_results.get("ranking_motivos", [])
+            search.ranking_motivos_condenacao = deep_results.get("ranking_motivos_condenacao", [])
+            search.predictions_summary = deep_results.get("plus_previsao_condenacao", [])
+            search.overall_risk_score = deep_results.get("score_risco_terceirizacao", 0.0)
+            search.ai_analysis = deep_results.get("ai_analysis", {})
+            search.movements_hash = deep_results.get("movements_hash")
+            search.economic_standing = deep_results["idoneidade_economica"]
             search.scan_status = "COMPLETED"
             search.last_checked_at = get_utc_now()
-
-            # Persiste novos processos sem duplicar
-            existing_numbers = {p.numero_processo for p in search.processes}
-            for proc in deep_results.get("processos", []):
-                num = proc.get("numero_processo")
-                if num and num not in existing_numbers:
-                    record = ProcessRecord(
-                        company_search_id=search.id,
-                        numero_processo=num,
-                        tribunal=proc.get("tribunal"),
-                        grau=proc.get("grau", "G1"),
-                        nivel_sigilo=proc.get("nivelSigilo", 0),
-                        primary_subject=proc.get("primary_subject"),
-                        subjects_json=proc.get("subjects"),
-                        observation=proc.get("observation"),
-                        sentence_outcome=proc.get("sentence_outcome", "em_aberto"),
-                        has_expert_report=proc.get("has_expert_report", False),
-                        raw_metadata=proc.get("raw_metadata"),
-                    )
-                    db.session.add(record)
-                    existing_numbers.add(num)
-
             db.session.commit()
-            logger.info("Deep Scan finalizado com sucesso para search_id=%d. Total: %d processos.", search_id, search.total_processes)
+
+            # Persiste os registros de processos individuais em lote protegido
+            try:
+                existing_numbers = {p.numero_processo for p in search.processes}
+                new_records = []
+                for proc in enriched_list:
+                    num = proc.get("numero_processo")
+                    if num and num not in existing_numbers:
+                        record = ProcessRecord(
+                            company_search_id=search.id,
+                            numero_processo=num,
+                            tribunal=str(proc.get("tribunal") or "")[:50],
+                            grau=str(proc.get("grau") or "G1")[:50],
+                            nivel_sigilo=proc.get("nivelSigilo", 0),
+                            primary_subject=proc.get("primary_subject"),
+                            subjects_json=proc.get("subjects"),
+                            observation=proc.get("observation"),
+                            sentence_outcome=proc.get("sentence_outcome", "em_aberto"),
+                            has_expert_report=proc.get("has_expert_report", False),
+                            raw_metadata=proc.get("raw_metadata"),
+                        )
+                        new_records.append(record)
+                        existing_numbers.add(num)
+
+                if new_records:
+                    for i in range(0, len(new_records), 50):
+                        try:
+                            db.session.bulk_save_objects(new_records[i:i + 50])
+                            db.session.commit()
+                        except Exception as batch_err:
+                            db.session.rollback()
+                            logger.debug("Lote de processos %d tratado defensivamente: %s", i, batch_err)
+            except Exception as rec_err:
+                logger.debug("Persistência detalhada de processos ignorada: %s", rec_err)
+
+            # REGRA 4: Salva no Cache em Memória com TTL de 15 minutos
+            deep_results["search_id"] = search.id
+            bg_cache_key = search_strategy.get("cache_key") or f"{search_strategy.get('mode', 'BROAD_BRAND')}::{search_strategy.get('comunica_query_term', clean_brand)}::{search_strategy.get('target_cnpj') or ''}"
+            SEARCH_CACHE[bg_cache_key] = (time.time(), deep_results)
+            logger.info("Deep Scan finalizado com sucesso em %.1fs para search_id=%d. Total: %d processos.",
+                        time.time() - start_ts, search_id, search.total_processes)
         except Exception as exc:
             db.session.rollback()
             logger.exception("Erro no Deep Scan em background (search_id=%d): %s", search_id, exc)
@@ -197,20 +403,48 @@ def search_company():
         company_input = request.args.get("name") or request.args.get("company_name")
         force_refresh = request.args.get("force_refresh", "false").lower() in ("true", "1")
 
-    if not company_input or not company_input.strip():
+    if company_input is None:
         return jsonify({"error": "Parâmetro 'company_name' é obrigatório."}), 400
 
-    raw_query = company_input.strip()
+    raw_query = str(company_input).strip()
+    if not raw_query or not is_valid_company_search_input(raw_query):
+        return jsonify({"error": "empresas so são pesquisadas por razão social ou CNPJ"}), 400
 
-    # Se for CNPJ, consulta BrasilAPI para obter a Razão Social oficial
-    resolved_name = raw_query
-    if is_cnpj(raw_query):
-        official_razao = fetch_cnpj_brasilapi(raw_query)
-        if official_razao:
-            resolved_name = official_razao
+    # 1. Resolução inteligente de estratégia de busca (BROAD_BRAND vs STRICT_RAZAO vs STRICT_CNPJ)
+    search_strategy = resolve_search_strategy(raw_query, brasil_api_fetcher=fetch_cnpj_brasilapi)
+    query_term = search_strategy["comunica_query_term"]
+    display_title = search_strategy["display_title"]
+    is_broad_brand = search_strategy["is_broad_brand"]
+    cnpj_used = search_strategy["target_cnpj"]
 
-    sanitized = sanitize_company_name(resolved_name)
-    normalized_name = sanitized.upper() if sanitized else resolved_name.upper()
+    sanitized = sanitize_company_name(query_term)
+    normalized_name = sanitized.upper() if sanitized else query_term.upper()
+
+    brand_term = extract_brand_search_term(
+        raw_input=raw_query,
+        razao_social=display_title,
+        nome_fantasia=query_term if not is_cnpj(raw_query) else "",
+    )
+
+    cache_key = search_strategy.get("cache_key") or f"{search_strategy['mode']}::{search_strategy['comunica_query_term']}::{search_strategy.get('target_cnpj') or ''}"
+
+    # =========================================================================
+    # REGRA 4: Cache em Memória com TTL de 15 minutos (0.05s de resposta)
+    # =========================================================================
+    if not force_refresh:
+        cached_entry = SEARCH_CACHE.get(cache_key)
+        if cached_entry:
+            ts, cached_data = cached_entry
+            econ_entry = cached_data.get("idoneidade_economica") or {}
+            # Se o cache em memória tiver homônimo INAPTO antigo para empresa ativa, invalida o cache
+            if econ_entry.get("situacao_cadastral") == "INAPTA" and (cached_data.get("total_processos") or 0) >= 25:
+                SEARCH_CACHE.pop(cache_key, None)
+            elif time.time() - ts < CACHE_TTL and (cached_data.get("total_processos") or 0) > 0:
+                logger.info("Cache em memória (TTL 15 min) ativado para '%s'. Resposta instantânea em 0.05s.", cache_key)
+                res_copy = dict(cached_data)
+                res_copy["cached"] = True
+                res_copy["cache_level"] = "L0_MEMORY_CACHE"
+                return jsonify(res_copy), 200
 
     # =========================================================================
     # CURTO-CIRCUITO NÍVEL 1 (Antes do CNJ): Busca instantânea no PostgreSQL
@@ -218,56 +452,120 @@ def search_company():
     if not force_refresh:
         try:
             cached_search = (
-                CompanySearch.query.filter_by(normalized_name=normalized_name)
+                CompanySearch.query.filter(
+                    (CompanySearch.normalized_name == normalized_name) |
+                    (CompanySearch.company_name == display_title)
+                )
                 .order_by(CompanySearch.updated_at.desc())
                 .first()
             )
-            # Só retorna cache se for recente e se a varredura tiver sido COMPLETA
-            # (evita congelar a interface em uma busca preliminar incompleta)
-            if cached_search and cached_search.is_recent(hours=24) and cached_search.scan_status == "COMPLETED":
+            # Só retorna cache se houver processos (> 0), for recente e varredura COMPLETA.
+            # Evita que uma busca vazia anterior ou preliminar congele o sistema por 24 horas.
+            if (
+                cached_search
+                and (cached_search.total_processes or 0) > 0
+                and cached_search.is_recent(hours=24)
+                and cached_search.scan_status == "COMPLETED"
+            ):
                 logger.info("Curto-circuito Nível 1 ativado para '%s' (search_id=%d).", normalized_name, cached_search.id)
                 proc_dicts = [p.to_dict() for p in cached_search.processes]
                 res = cached_search.to_dict()
                 res["empresa"] = cached_search.company_name
+                res["is_broad_brand"] = is_broad_brand
+                res["search_strategy"] = search_strategy
                 res["total_processos"] = cached_search.total_processes
                 res["desfechos_sentencas"] = cached_search.outcomes_summary or {}
-                if proc_dicts:
+                res["ranking_motivos"] = cached_search.ranking_motivos or []
+                res["ranking_motivos_condenacao"] = cached_search.ranking_motivos_condenacao or []
+                res["plus_previsao_condenacao"] = cached_search.predictions_summary or []
+                res["score_risco_terceirizacao"] = cached_search.overall_risk_score or 0.0
+                res["overall_risk_score"] = cached_search.overall_risk_score or 0.0
+
+                if proc_dicts and len(proc_dicts) >= (cached_search.total_processes or 0):
                     fresh_metrics = orchestrator.predictor.generate_dashboard_metrics(
                         cached_search.company_name, proc_dicts
                     )
+                    res["total_processos"] = fresh_metrics.get("total_processos", cached_search.total_processes)
+                    res["desfechos_sentencas"] = fresh_metrics.get("desfechos_sentencas", cached_search.outcomes_summary)
                     res["plus_previsao_condenacao"] = fresh_metrics["plus_previsao_condenacao"]
                     res["score_risco_terceirizacao"] = fresh_metrics["score_risco_terceirizacao"]
                     res["overall_risk_score"] = fresh_metrics["score_risco_terceirizacao"]
+                    res["ranking_motivos"] = fresh_metrics.get("ranking_motivos", cached_search.ranking_motivos or [])
+                    res["ranking_motivos_condenacao"] = fresh_metrics.get("ranking_motivos_condenacao", cached_search.ranking_motivos_condenacao or [])
+                    res["probabilidade_condenacao_geral_pct"] = fresh_metrics.get("probabilidade_condenacao_geral_pct")
+                    res["taxa_historica_condenacao_pct"] = fresh_metrics.get("taxa_historica_condenacao_pct")
+                    cached_search.ranking_motivos = fresh_metrics.get("ranking_motivos", cached_search.ranking_motivos or [])
+                    cached_search.ranking_motivos_condenacao = fresh_metrics.get("ranking_motivos_condenacao", cached_search.ranking_motivos_condenacao or [])
                     cached_search.predictions_summary = fresh_metrics["plus_previsao_condenacao"]
                     cached_search.overall_risk_score = fresh_metrics["score_risco_terceirizacao"]
-                # Re-executa o Agente ADK sobre os metadados para garantir parecer sempre atualizado
+                # Análise de Idoneidade Econômica & Risco de Calote Subsidiário (Súmula 331 TST)
+                econ_data = economic_service.evaluate_economic_standing(
+                    company_name=cached_search.company_name,
+                    cnpj=cnpj_used,
+                    company_processes=proc_dicts,
+                    p_condenacao_trabalhista=res.get("probabilidade_condenacao_geral_pct") or 0.0,
+                    search_strategy=search_strategy,
+                )
+                res["idoneidade_economica"] = econ_data
+                res["logo"] = econ_data.get("logo", {})
+                res["capital_social_consolidado"] = econ_data.get("valor_formatado") or econ_data.get("capital_social_formatado")
+                res["observacao_porte"] = econ_data.get("observacao_porte")
+                res["capital_social_display"] = econ_data.get("capital_social_display")
+                if econ_data.get("indice_exposicao_financeira") is not None:
+                    res["indice_exposicao_financeira"] = econ_data["indice_exposicao_financeira"]
+                    res["score_risco_terceirizacao"] = econ_data["indice_exposicao_financeira"]
+                    res["overall_risk_score"] = econ_data["indice_exposicao_financeira"]
+
+                # Re-executa o Agente ADK sobre os metadados (incluindo idoneidade econômica) para garantir parecer sempre atualizado
                 fresh_ai = orchestrator.ai_analyzer.analyze_company(res)
                 if fresh_ai:
                     res["ai_analysis"] = fresh_ai
                     cached_search.ai_analysis = fresh_ai
-                    db.session.commit()
                 res["cached"] = True
                 res["cache_level"] = "L1_DATABASE"
                 res["search_id"] = cached_search.id
                 res["processos"] = proc_dicts
                 res["parecer_agente_adk"] = res.get("ai_analysis", {})
+
+                # Atualiza os dados de idoneidade no banco de dados para eliminar dados defasados
+                try:
+                    cached_search.economic_standing = econ_data
+                    db.session.commit()
+                except Exception:
+                    pass
+
                 return jsonify(res), 200
         except Exception as db_err:
             logger.debug("Falha na checagem de cache L1 no banco: %s", db_err)
 
     if force_refresh:
         orchestrator._cache.pop(raw_query.lower(), None)
+        orchestrator._cache.pop(query_term.lower(), None)
         orchestrator._cache.pop(normalized_name.lower(), None)
+
+    current_job_id = str(uuid.uuid4())
+    with ACTIVE_SEARCH_LOCK:
+        global ACTIVE_SEARCH_JOB_ID
+        if ACTIVE_SEARCH_JOB_ID:
+            CANCELLED_JOB_IDS.add(ACTIVE_SEARCH_JOB_ID)
+            if len(CANCELLED_JOB_IDS) > 100:
+                CANCELLED_JOB_IDS.clear()
+        ACTIVE_SEARCH_JOB_ID = current_job_id
 
     try:
         # =====================================================================
-        # FAST-PATH OTIMIZADO (< 3 segundos): Busca até 200 publicações reais
+        # FAST-PATH OTIMIZADO (< 2 segundos): Busca Página 1 no Comunica PJe
         # =====================================================================
         fast_results = orchestrator.analyze_company_by_name(
-            company_name=resolved_name,
+            company_name=display_title,
+            search_strategy=search_strategy,
             fast_path=True,
-            limit_processes=100,
+            limit_processes=50,
         )
+
+        fast_results["empresa"] = display_title
+        fast_results["is_broad_brand"] = is_broad_brand
+        fast_results["search_strategy"] = search_strategy
 
         new_hash = fast_results.get("movements_hash")
         initial_status = fast_results.get("scan_status", "COMPLETED")
@@ -278,7 +576,10 @@ def search_company():
         cached_search = None
         try:
             cached_search = (
-                CompanySearch.query.filter_by(normalized_name=normalized_name)
+                CompanySearch.query.filter(
+                    (CompanySearch.normalized_name == normalized_name) |
+                    (CompanySearch.company_name == display_title)
+                )
                 .order_by(CompanySearch.updated_at.desc())
                 .first()
             )
@@ -294,11 +595,36 @@ def search_company():
 
         fast_results["parecer_agente_adk"] = fast_results.get("ai_analysis", {})
 
+        # Análise de Idoneidade Econômica & Risco de Calote Subsidiário (Súmula 331 TST)
+        econ_data = economic_service.evaluate_economic_standing(
+            company_name=display_title,
+            cnpj=cnpj_used,
+            company_processes=fast_results.get("processos", []),
+            p_condenacao_trabalhista=fast_results.get("probabilidade_condenacao_geral_pct") or 0.0,
+            discovered_entities=fast_results.get("discovered_entities", []),
+            search_strategy=search_strategy,
+        )
+        fast_results["idoneidade_economica"] = econ_data
+        fast_results["logo"] = econ_data.get("logo", {})
+        fast_results["capital_social_consolidado"] = econ_data.get("valor_formatado") or econ_data.get("capital_social_formatado")
+        fast_results["observacao_porte"] = econ_data.get("observacao_porte")
+        fast_results["capital_social_display"] = econ_data.get("capital_social_display")
+        if econ_data.get("indice_exposicao_financeira") is not None:
+            fast_results["indice_exposicao_financeira"] = econ_data["indice_exposicao_financeira"]
+            fast_results["score_risco_terceirizacao"] = econ_data["indice_exposicao_financeira"]
+            fast_results["overall_risk_score"] = econ_data["indice_exposicao_financeira"]
+
+        # Sincroniza o parecer do Agente ADK com a idoneidade econômica calculada
+        fresh_ai = orchestrator.ai_analyzer.analyze_company(fast_results)
+        if fresh_ai:
+            fast_results["ai_analysis"] = fresh_ai
+            fast_results["parecer_agente_adk"] = fresh_ai
+
         # Persistência do resultado no PostgreSQL
         search_id = None
         try:
             search_entry = CompanySearch(
-                company_name=resolved_name,
+                company_name=display_title,
                 normalized_name=normalized_name,
                 total_processes=fast_results.get("total_processos", 0),
                 secrecy_count=sum(
@@ -307,7 +633,9 @@ def search_company():
                 secrecy_rate=fast_results.get("taxa_sigilo_pct", 0.0) / 100.0,
                 outcomes_summary=fast_results.get("desfechos_sentencas", {}),
                 ranking_motivos=fast_results.get("ranking_motivos", []),
+                ranking_motivos_condenacao=fast_results.get("ranking_motivos_condenacao", []),
                 predictions_summary=fast_results.get("plus_previsao_condenacao", []),
+                economic_standing=econ_data,
                 overall_risk_score=fast_results.get("score_risco_terceirizacao", 0.0),
                 ai_analysis=fast_results.get("ai_analysis", {}),
                 movements_hash=new_hash,
@@ -324,8 +652,8 @@ def search_company():
                 record = ProcessRecord(
                     company_search_id=search_entry.id,
                     numero_processo=proc.get("numero_processo"),
-                    tribunal=proc.get("tribunal"),
-                    grau=proc.get("grau", "G1"),
+                    tribunal=str(proc.get("tribunal") or "")[:50],
+                    grau=str(proc.get("grau") or "G1")[:50],
                     nivel_sigilo=proc.get("nivelSigilo", 0),
                     primary_subject=proc.get("primary_subject"),
                     subjects_json=proc.get("subjects"),
@@ -346,10 +674,17 @@ def search_company():
         if search_id and initial_status == "PARTIAL_FAST_PATH" and not current_app.config.get("TESTING"):
             app_ref = current_app._get_current_object()
             background_executor.submit(
-                _deep_scan_background_worker, app_ref, search_id, resolved_name
+                _deep_scan_background_worker,
+                app_ref,
+                search_id,
+                display_title,
+                search_strategy,
+                current_job_id,
+                fast_results.get("processos", []),
             )
 
         fast_results["scan_status"] = initial_status
+        SEARCH_CACHE[cache_key] = (time.time(), fast_results)
         return jsonify(fast_results), 200
 
     except Exception as exc:
@@ -378,10 +713,43 @@ def get_search_status(search_id: int):
         }
         # Quando completado, retorna os dados atualizados para atualizar o dashboard sem reload
         if is_completed:
+            proc_dicts = [p.to_dict() for p in search.processes]
             response["data"] = search.to_dict()
             response["data"]["empresa"] = search.company_name
-            response["data"]["processos"] = [p.to_dict() for p in search.processes]
+            response["data"]["processos"] = proc_dicts
+            response["data"]["is_broad_brand"] = "GRUPO CONSOLIDADO" in search.company_name.upper()
+
+            # Prioriza estritamente os totais, desfechos e motivos consolidados do search
+            # (calculados pelo background worker sobre TODOS os processos da varredura completa)
+            response["data"]["total_processos"] = search.total_processes or len(proc_dicts)
+            response["data"]["desfechos_sentencas"] = search.outcomes_summary or {}
+            response["data"]["ranking_motivos"] = search.ranking_motivos or []
+            response["data"]["ranking_motivos_condenacao"] = search.ranking_motivos_condenacao or []
+            response["data"]["plus_previsao_condenacao"] = search.predictions_summary or []
+            response["data"]["score_risco_terceirizacao"] = search.overall_risk_score or 0.0
+            response["data"]["overall_risk_score"] = search.overall_risk_score or 0.0
+
+            # Se proc_dicts contiver o volume completo ou superior, sincroniza métricas
+            if proc_dicts and len(proc_dicts) >= (search.total_processes or 0):
+                fresh_metrics = orchestrator.predictor.generate_dashboard_metrics(
+                    search.company_name, proc_dicts
+                )
+                response["data"]["total_processos"] = fresh_metrics.get("total_processos", search.total_processes)
+                response["data"]["desfechos_sentencas"] = fresh_metrics.get("desfechos_sentencas", search.outcomes_summary)
+                response["data"]["ranking_motivos"] = fresh_metrics.get("ranking_motivos", search.ranking_motivos)
+                response["data"]["ranking_motivos_condenacao"] = fresh_metrics.get("ranking_motivos_condenacao", search.ranking_motivos_condenacao)
+                response["data"]["plus_previsao_condenacao"] = fresh_metrics.get("plus_previsao_condenacao", search.predictions_summary)
+                response["data"]["score_risco_terceirizacao"] = fresh_metrics.get("score_risco_terceirizacao", search.overall_risk_score)
+                response["data"]["overall_risk_score"] = fresh_metrics.get("score_risco_terceirizacao", search.overall_risk_score)
+
             response["data"]["parecer_agente_adk"] = response["data"].get("ai_analysis", {})
+            if isinstance(search.economic_standing, dict):
+                response["data"]["idoneidade_economica"] = search.economic_standing
+                response["data"]["logo"] = search.economic_standing.get("logo", {})
+                if search.economic_standing.get("indice_exposicao_financeira") is not None:
+                    response["data"]["indice_exposicao_financeira"] = search.economic_standing["indice_exposicao_financeira"]
+                    response["data"]["score_risco_terceirizacao"] = search.economic_standing["indice_exposicao_financeira"]
+                    response["data"]["overall_risk_score"] = search.economic_standing["indice_exposicao_financeira"]
 
         return jsonify(response), 200
     except Exception as exc:
@@ -459,9 +827,28 @@ def incremental_sync(search_id: int):
         return jsonify({"error": "Falha na sincronização incremental."}), 500
 
 
-@api_bp.route("/history", methods=["GET"])
+@api_bp.route("/history", methods=["GET", "DELETE"])
 def get_search_history():
-    """Retorna o histórico de análises de empresas salvas no banco de dados."""
+    """
+    GET: Retorna o histórico de análises de empresas salvas no banco de dados.
+    DELETE: Remove todo o histórico de buscas e processos vinculados do banco de dados.
+    """
+    if request.method == "DELETE":
+        try:
+            ProcessRecord.query.delete()
+            CompanySearch.query.delete()
+            db.session.commit()
+            SEARCH_CACHE.clear()
+            logger.info("Todo o histórico de pesquisas e processos foi limpo pelo usuário.")
+            return jsonify({
+                "status": "success",
+                "message": "Histórico de pesquisas e processos limpo com sucesso."
+            }), 200
+        except Exception as exc:
+            db.session.rollback()
+            logger.error("Erro ao limpar histórico de pesquisas: %s", exc)
+            return jsonify({"error": "Falha ao limpar histórico."}), 500
+
     limit = int(request.args.get("limit", 20))
     try:
         searches = (
@@ -478,9 +865,26 @@ def get_search_history():
         return jsonify({"error": "Não foi possível carregar o histórico."}), 500
 
 
-@api_bp.route("/history/<int:search_id>", methods=["GET"])
+@api_bp.route("/history/<int:search_id>", methods=["GET", "DELETE"])
 def get_search_detail(search_id: int):
-    """Retorna os dados detalhados e a lista de processos de uma análise específica."""
+    """
+    GET: Retorna os dados detalhados e a lista de processos de uma análise específica.
+    DELETE: Remove um registro específico do histórico.
+    """
+    if request.method == "DELETE":
+        try:
+            search = CompanySearch.query.get_or_404(search_id)
+            db.session.delete(search)
+            db.session.commit()
+            logger.info("Registro search_id=%d removido pelo usuário.", search_id)
+            return jsonify({
+                "status": "success",
+                "message": f"Registro {search_id} removido com sucesso."
+            }), 200
+        except Exception as exc:
+            db.session.rollback()
+            logger.error("Erro ao deletar search_id %d: %s", search_id, exc)
+            return jsonify({"error": "Falha ao remover o registro."}), 500
     try:
         search = CompanySearch.query.get_or_404(search_id)
         proc_dicts = [p.to_dict() for p in search.processes]
@@ -493,6 +897,9 @@ def get_search_detail(search_id: int):
             )
             result["plus_previsao_condenacao"] = fresh_metrics["plus_previsao_condenacao"]
             result["score_risco_terceirizacao"] = fresh_metrics["score_risco_terceirizacao"]
+            result["ranking_motivos_condenacao"] = fresh_metrics.get("ranking_motivos_condenacao", [])
+            result["previsao_bloqueada"] = fresh_metrics.get("previsao_bloqueada", False)
+            result["motivo_bloqueio_previsao"] = fresh_metrics.get("motivo_bloqueio_previsao")
         result["parecer_agente_adk"] = result.get("ai_analysis", {})
         return jsonify(result), 200
     except Exception as exc:

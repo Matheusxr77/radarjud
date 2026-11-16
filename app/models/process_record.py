@@ -17,8 +17,8 @@ class ProcessRecord(db.Model):
     company_search_id = db.Column(db.Integer, db.ForeignKey("company_searches.id", ondelete="CASCADE"), nullable=False, index=True)
 
     numero_processo = db.Column(db.String(30), nullable=False, index=True)
-    tribunal = db.Column(db.String(20), nullable=True, index=True)
-    grau = db.Column(db.String(10), nullable=True)
+    tribunal = db.Column(db.String(50), nullable=True, index=True)
+    grau = db.Column(db.String(50), nullable=True)
     nivel_sigilo = db.Column(db.Integer, default=0, nullable=False)
 
     # Assunto principal e lista de assuntos TPU

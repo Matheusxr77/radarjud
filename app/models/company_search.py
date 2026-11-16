@@ -31,7 +31,9 @@ class CompanySearch(db.Model):
     # Sumários estruturados em JSON
     outcomes_summary = db.Column(db.JSON, nullable=True)
     ranking_motivos = db.Column(db.JSON, nullable=True)
+    ranking_motivos_condenacao = db.Column(db.JSON, nullable=True)
     predictions_summary = db.Column(db.JSON, nullable=True)
+    economic_standing = db.Column(db.JSON, nullable=True)
     overall_risk_score = db.Column(db.Float, default=0.0, nullable=False)
     ai_analysis = db.Column(db.JSON, nullable=True)
 
@@ -55,18 +57,42 @@ class CompanySearch(db.Model):
         outcomes = self.outcomes_summary or {}
         julgados = outcomes.get("condenacoes", 0) + outcomes.get("acordos", 0) + outcomes.get("improcedentes", 0)
         condenacoes = outcomes.get("condenacoes", 0)
-        taxa_cond_empirica = round((condenacoes / julgados) * 100, 1) if julgados > 0 else None
-        # Posterior com shrinkage Bayesiano (alpha_0 = 3.0, p0 = 0.50) para evitar ruído em amostras pequenas
-        prob_cond_shrunk = (
-            round(((condenacoes + 3.0 * 0.50) / (julgados + 3.0)) * 100.0, 1)
-            if julgados > 0
-            else (self.overall_risk_score if self.total_processes > 0 else None)
+        
+        previsao_bloqueada = (condenacoes == 0)
+        motivo_bloqueio = (
+            "Empresa sem histórico de condenações prévias nos tribunais consultados. "
+            "Previsão de condenação desativada por ausência de passivo condenatório anterior."
+            if previsao_bloqueada else None
         )
+
+        if previsao_bloqueada:
+            taxa_cond_empirica = 0.0
+            prob_cond_shrunk = 0.0
+            plus_previsoes = []
+        else:
+            taxa_cond_empirica = round((condenacoes / julgados) * 100, 1) if julgados > 0 else None
+            prob_cond_shrunk = (
+                round(((condenacoes + 3.0 * 0.50) / (julgados + 3.0)) * 100.0, 1)
+                if julgados > 0
+                else (self.overall_risk_score if self.total_processes > 0 else None)
+            )
+            plus_previsoes = self.predictions_summary or []
 
         public_count = max(0, (self.total_processes or 0) - (self.secrecy_count or 0))
         niveis_sigilo = {"0": public_count}
         if self.secrecy_count and self.secrecy_count > 0:
             niveis_sigilo["1"] = self.secrecy_count
+
+        # Avaliação consistente de Idoneidade Econômica & Logomarca
+        from app.services.economic_service import EconomicStandingService
+        econ_data = self.economic_standing
+        if not econ_data:
+            econ_service = EconomicStandingService()
+            econ_data = econ_service.evaluate_economic_standing(
+                company_name=self.company_name,
+                company_processes=[p.to_dict() for p in self.processes],
+                p_condenacao_trabalhista=prob_cond_shrunk or self.overall_risk_score or 0.0,
+            )
 
         return {
             "id": self.id,
@@ -82,11 +108,16 @@ class CompanySearch(db.Model):
             "last_checked_at": self.last_checked_at.isoformat() if self.last_checked_at else None,
             "outcomes_summary": self.outcomes_summary or {},
             "ranking_motivos": self.ranking_motivos or [],
-            "plus_previsao_condenacao": self.predictions_summary or [],
+            "ranking_motivos_condenacao": self.ranking_motivos_condenacao or [],
+            "previsao_bloqueada": previsao_bloqueada,
+            "motivo_bloqueio_previsao": motivo_bloqueio,
+            "plus_previsao_condenacao": plus_previsoes,
             "overall_risk_score": self.overall_risk_score,
             "probabilidade_condenacao_geral_pct": prob_cond_shrunk,
             "taxa_historica_condenacao_pct": taxa_cond_empirica,
             "score_risco_terceirizacao": self.overall_risk_score,
+            "idoneidade_economica": econ_data,
+            "logo": econ_data.get("logo", {}) if isinstance(econ_data, dict) else {},
             "ai_analysis": self.ai_analysis or {},
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
