@@ -72,10 +72,10 @@ class LegalAIAnalyzer:
 
                 if loop and loop.is_running():
                     import concurrent.futures
+                    def _run_adk_task():
+                        return asyncio.run(_adk_gerar_parecer(empresa, summary_data))
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        return pool.submit(
-                            lambda: asyncio.run(_adk_gerar_parecer(empresa, summary_data))
-                        ).result(timeout=20)
+                        return pool.submit(_run_adk_task).result(timeout=20)
                 else:
                     return asyncio.run(_adk_gerar_parecer(empresa, summary_data))
             except Exception as exc:
@@ -126,6 +126,33 @@ class LegalAIAnalyzer:
         total_julgados = condenacoes + improcedentes + acordos
         ranking = summary_data.get("ranking_motivos", [])
 
+        # Dados de Idoneidade Econômica e Solvência Patrimonial
+        econ = summary_data.get("idoneidade_economica") or {}
+        cenario_tipo = econ.get("cenario_tipo") or summary_data.get("cenario_tipo")
+        prob_insolvencia = econ.get("probabilidade_insolvencia")
+        if prob_insolvencia is None:
+            prob_insolvencia = summary_data.get("probabilidade_insolvencia", 50.0)
+        try:
+            prob_insolvencia = float(prob_insolvencia)
+        except (ValueError, TypeError):
+            prob_insolvencia = 50.0
+
+        risco_subsidiario = econ.get("risco_exposicao_subsidiaria") or econ.get("risco_calote_subsidiario")
+        if risco_subsidiario is None:
+            risco_subsidiario = summary_data.get("risco_exposicao_subsidiaria") or summary_data.get("risco_calote_subsidiario", 0.0)
+        try:
+            risco_subsidiario = float(risco_subsidiario)
+        except (ValueError, TypeError):
+            risco_subsidiario = 0.0
+
+        capital_fmt = (
+            econ.get("capital_social_formatado")
+            or econ.get("valor_formatado")
+            or summary_data.get("capital_social_formatado")
+            or summary_data.get("capital_social_consolidado")
+            or ""
+        )
+
         # Caso 1: Empresa sem nenhum processo localizado no CNJ
         if total == 0:
             resumo = (
@@ -155,21 +182,45 @@ class LegalAIAnalyzer:
 
         # Caso 2: Empresa com processos abertos, mas sem histórico anterior julgado (condenações/improcedências/acordos)
         if total_julgados == 0:
-            top_motivos = [r["motivo"] for r in ranking[:3]] if ranking else ["Temas Contratuais Gerais"]
+            generic_ai_terms = {
+                "outros motivos trabalhistas", "outros", "reclamacao trabalhista (geral)",
+                "obrigação / reclamação em apuração inicial", "obrigacao / reclamacao em apuracao inicial",
+                "direito do trabalho", "atos processuais"
+            }
+            specific_motivos = [
+                r["motivo"] for r in ranking
+                if r.get("motivo", "").lower() not in generic_ai_terms
+            ]
+            chosen_pool = specific_motivos if specific_motivos else [r.get("motivo") for r in ranking if r.get("motivo")]
+            top_motivos = chosen_pool[:3] if chosen_pool else ["Temas Contratuais Gerais"]
             motivos_str = ", ".join(top_motivos)
-            resumo = (
-                f"A empresa {empresa} possui {total} processo(s) em tramitação ({motivos_str}), porém "
-                f"nenhum desfecho anterior transitado em julgado (sentença ou acordo homologado). "
-                f"Sem dados pretéritos de julgamento na empresa, as estimativas de probabilidade de vitória "
-                f"adotam exclusivamente as médias jurisprudenciais basais dos TRTs."
-            )
+
+            if cenario_tipo == "CENARIO_A":
+                rec_homologacao = "APROVAR / RISCO MITIGADO"
+                perfil_risco = f"Baixo ({risco_subsidiario:.1f}%)"
+                resumo = (
+                    f"A empresa {empresa} possui {total} processo(s) em tramitação ({motivos_str}) e plena solidez "
+                    f"patrimonial comprovada (Capital Social de {capital_fmt} e solvência ativa). O amplo lastro econômico "
+                    f"assegura a quitação autônoma de qualquer contingência, eliminando o risco de redirecionamento "
+                    f"subsidiário ao tomador de serviços nos termos da Súmula 331 do TST."
+                )
+            else:
+                rec_homologacao = "APROVAR COM RETENÇÃO CAUTELAR"
+                perfil_risco = "Amostra Inicial (Em Andamento)"
+                resumo = (
+                    f"A empresa {empresa} possui {total} processo(s) em tramitação ({motivos_str}), porém "
+                    f"nenhum desfecho anterior transitado em julgado (sentença ou acordo homologado). "
+                    f"Sem dados pretéritos de julgamento na empresa, as estimativas de probabilidade de vitória "
+                    f"adotam exclusivamente as médias jurisprudenciais basais dos TRTs."
+                )
+
             return {
                 "modelo_utilizado": "Local-Legal-NLP-v2",
                 "orquestrador": "Google ADK (Agent Development Kit)",
-                "perfil_risco_consolidado": "Amostra Inicial (Em Andamento)",
+                "perfil_risco_consolidado": perfil_risco,
                 "parecer_governanca": resumo,
                 "resumo_executivo": resumo,
-                "recomendacao_homologacao": "APROVAR COM RETENÇÃO CAUTELAR",
+                "recomendacao_homologacao": rec_homologacao,
                 "taxa_historica_vitoria_empresa_pct": None,
                 "taxa_historica_acordos_pct": None,
                 "taxa_historica_condenacao_pct": None,
@@ -190,12 +241,42 @@ class LegalAIAnalyzer:
         taxa_acordo_historica = round((acordos / total_julgados) * 100, 1)
         taxa_condenacao_historica = round((condenacoes / total_julgados) * 100, 1)
 
-        # Identificação dos principais temas de vulnerabilidade
-        top_motivos = [r["motivo"] for r in ranking[:3]] if ranking else ["Relações Contratuais Gerais"]
+        # Identificação dos principais temas de vulnerabilidade priorizando causas substantivas
+        generic_ai_terms = {
+            "outros motivos trabalhistas", "outros", "reclamacao trabalhista (geral)",
+            "obrigação / reclamação em apuração inicial", "obrigacao / reclamacao em apuracao inicial",
+            "direito do trabalho", "atos processuais"
+        }
+        specific_motivos = [
+            r["motivo"] for r in ranking
+            if r.get("motivo", "").lower() not in generic_ai_terms
+        ]
+        chosen_pool = specific_motivos if specific_motivos else [r.get("motivo") for r in ranking if r.get("motivo")]
+        top_motivos = chosen_pool[:3] if chosen_pool else ["Relações Contratuais Gerais"]
         motivos_str = ", ".join(top_motivos)
 
-        # Diagnóstico de risco baseado em dados empíricos reais
-        if taxa_vitoria_historica >= 50.0:
+        # Diagnóstico integrado de risco: subordina a recomendação ao lastro patrimonial (Cenário A vs B)
+        if cenario_tipo == "CENARIO_A":
+            perfil_risco = f"Baixo ({risco_subsidiario:.1f}%)"
+            rec_homologacao = "APROVAR / RISCO MITIGADO"
+            parecer_resumo = (
+                f"A empresa {empresa} possui plena higidez econômico-financeira comprovada perante a Receita Federal "
+                f"(Capital Social de {capital_fmt} e probabilidade de insolvência de apenas {prob_insolvencia:.1f}%). "
+                f"Embora apresente volume de litígios típico de grandes corporações (com taxa histórica desfavorável de "
+                f"{taxa_condenacao_historica}% dos julgados concentrados em {motivos_str}), o substancial lastro patrimonial "
+                f"garante sua capacidade autônoma de quitação integral, eliminando o risco de condenação subsidiária ou execução "
+                f"contra o contratante nos termos da Súmula 331 do TST (Risco Subsidiário estimado em apenas {risco_subsidiario:.1f}%)."
+            )
+        elif cenario_tipo == "CENARIO_B":
+            perfil_risco = "Crítico / Elevado"
+            rec_homologacao = "REPROVAR / BLOQUEAR"
+            parecer_resumo = (
+                f"A empresa {empresa} apresenta vulnerabilidade econômico-financeira (P(Insolvência) estimada em {prob_insolvencia:.1f}%) "
+                f"associada a passivo processual relevante ({taxa_condenacao_historica}% de condenações em {motivos_str}). "
+                f"Há risco iminente de inadimplemento das obrigações trabalhistas e redirecionamento da execução contra o tomador "
+                f"de serviços sob a ótica da Súmula 331 do TST."
+            )
+        elif taxa_vitoria_historica >= 50.0:
             perfil_risco = "Baixo a Moderado"
             rec_homologacao = "HOMOLOGAR SEM RESTRIÇÕES"
             parecer_resumo = (
