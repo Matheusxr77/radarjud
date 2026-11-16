@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, Tuple
 
 import requests
 
-from app.utils.sanitizer import sanitize_company_name, is_cnpj, fetch_cnpj_brasilapi
+from app.utils.sanitizer import sanitize_company_name, is_cnpj, fetch_cnpj_brasilapi, remove_accents, extract_brand_search_term
 from app.utils.crypto import generate_movements_hash
 from app.utils.rate_limiter import RateLimiter
 from app.services.ai_analyzer import LegalAIAnalyzer
@@ -17,75 +17,219 @@ from app.services.tpu_constants import (
     TPU_EXPERT_REPORT_CODES,
 )
 
+import html
+
 logger = logging.getLogger(__name__)
 
-# Padrões semânticos expandidos para inferência de causa da ação a partir do texto das publicações PJe
-# quando os metadados do DataJud/CNJ retornarem apenas "Outros Assuntos" ou categorias genéricas.
+
+def clean_text_for_inference(text: str) -> str:
+    """
+    Remove entidades HTML, substitui tags HTML por espaços e normaliza espaços em branco
+    para evitar junção acidental de palavras e permitir busca semântica precisa via regex.
+    """
+    if not text:
+        return ""
+    unescaped = html.unescape(str(text))
+    without_tags = re.sub(r"<[^>]+>", " ", unescaped)
+    return re.sub(r"\s+", " ", without_tags).strip()
+
+
+# Padrões semânticos expandidos para inferência de causa da ação a partir do texto das publicações PJe,
+# classes processuais e movimentações quando os metadados do DataJud/CNJ retornarem apenas "Outros Assuntos"
+# ou códigos genéricos de topo de árvore (como TPU 864 - Direito do Trabalho).
 SUBJECT_INFERENCE_PATTERNS: List[Tuple[re.Pattern, str]] = [
-    # 1. Categoria Bancária / Finanças (Ex: Bradesco, Itaú, Santander, BB)
-    (re.compile(r"\b(7[ªa]\s*(e|a)\s*8[ªa]\s*horas?|s[ée]tima\s*e\s*oitava\s*horas?|divisor\s*180|divisor\s*200|banc[áa]ri[oa]|cargo\s*de\s*confian[çc]a\s*banc[áa]ri[oa]|art(\.|igo)?\s*224|enquadramento\s*sindical\s*banc[áa]ri[oa]|quebra\s*de\s*caixa|gratifica[çc][ãa]o\s*de\s*fun[çc][ãa]o\s*banc[áa]ria)\b", re.IGNORECASE), "Direitos da Categoria Bancária (7ª/8ª Horas / Enquadramento)"),
+    # 1. Categoria Bancária / Finanças (Ex: Bradesco, Itaú, Santander, BB, Fintechs)
+    (
+        re.compile(
+            r"\b(7[ªa]\s*(e|a)\s*8[ªa]\s*horas?|s[ée]tima\s*e\s*oitava\s*horas?|divisor\s*(180|200)|"
+            r"banc[áa]ri[oa]|cargo\s*de\s*confian[çc]a\s*banc[áa]ri[oa]|art(\.|igo)?\s*224|"
+            r"enquadramento\s*sindical\s*banc[áa]ri[oa]|quebra\s*de\s*caixa|gratifica[çc][ãa]o\s*de\s*fun[çc][ãa]o\s*banc[áa]ria|"
+            r"plano\s*de\s*cargos\s*e\s*sal[áa]rios\s*banc[áa]rio)\b",
+            re.IGNORECASE,
+        ),
+        "Direitos da Categoria Bancária (7ª e 8ª Horas / Enquadramento)",
+    ),
 
     # 2. Horas Extras e Jornada de Trabalho
-    (re.compile(r"\b(horas?\s+extras?|banco\s+de\s+horas?|intervalo\s+intra(jornada)?|intervalo\s+interjornada|jornada\s+de\s+trabalho|cart[ãa]o(ões)?\s+de\s+ponto|registro\s+de\s+ponto|controle\s+de\s+ponto|minutos\s+residuais|tempo\s+[àa]\s+disposi[çc][ãa]o|jornada\s+12x36|sobreaviso|prontid[ãa]o)\b", re.IGNORECASE), "Horas Extras"),
+    (
+        re.compile(
+            r"\b(horas?\s+(extras?|suplementares?|extraordin[áa]rias?)|sobrejornada|banco\s+de\s+horas?|"
+            r"intervalo\s+intra(jornada)?|intervalo\s+interjornada|jornada\s+de\s+trabalho|"
+            r"cart[ãa]o(ões)?\s+de\s+ponto|registro\s+de\s+ponto|controle\s+de\s+ponto|folha\s+de\s+ponto|"
+            r"minutos\s+residuais|tempo\s+[àa]\s+disposi[çc][ãa]o|jornada\s+12x36|sobreaviso|prontid[ãa]o|"
+            r"repouso\s+semanal\s+remunerado|reflexos?\s+(em|no)\s+dsr)\b",
+            re.IGNORECASE,
+        ),
+        "Falta de Pagamento de Horas Extras e Reflexos",
+    ),
 
-    # 3. Adicional de Insalubridade
-    (re.compile(r"\b(adicional\s+de\s+insalubridade|insalubre|grau\s+(m[ée]dio|m[áa]ximo|m[íi]nimo))\b", re.IGNORECASE), "Adicional de Insalubridade"),
+    # 3. FGTS e Multa Rescisória de 40%
+    (
+        re.compile(
+            r"\b(fgts|fundo\s+de\s+garantia|dep[óo]sitos?\s+(do\s+)?fgts|multa\s+(rescis[óo]ria\s+)?(de\s+)?40%?|"
+            r"40%\s+do\s+fgts|saque\s+do\s+fgts|diferen[çc]as?\s+de\s+fgts|recolhimento\s+(do\s+)?fgts|"
+            r"extrato\s+anal[íi]tico\s+do\s+fgts|guias\s+de\s+fgts)\b",
+            re.IGNORECASE,
+        ),
+        "Não Recolhimento de FGTS e Multa Rescisória de 40%",
+    ),
 
-    # 4. Adicional de Periculosidade
-    (re.compile(r"\b(adicional\s+de\s+periculosidade|periculoso|inflam[áa]veis|eletricidade|vigilante|transporte\s+de\s+valores)\b", re.IGNORECASE), "Adicional de Periculosidade"),
+    # 4. Verbas Rescisórias e Término Contratual
+    (
+        re.compile(
+            r"\b(verbas?\s+rescis[óo]rias?|aviso\s+pr[ée]vio(\s+indenizado)?|saldo\s+de\s+sal[áa]rio|"
+            r"f[ée]rias(\s*(\+|\s*e)\s*1/3|\s+proporcionais|\s+vencidas)?|d[ée]cimo\s+terceiro(\s+proporcional)?|"
+            r"13[º°]\s+sal[áa]rio|rescis[ãa]o\s+indireta|dispensa\s+imotivada|justa\s+causa|"
+            r"termo\s+de\s+rescis[ãa]o|trct|baixa\s+na\s+ctps|entrega\s+de\s+guias)\b",
+            re.IGNORECASE,
+        ),
+        "Inadimplemento de Verbas Rescisórias e Aviso Prévio",
+    ),
 
-    # 5. Adicional Noturno
-    (re.compile(r"\b(adicional\s+noturno|trabalho\s+noturno|hora\s+noturna)\b", re.IGNORECASE), "Adicional Noturno"),
+    # 5. Multas dos Artigos 477 e 467 da CLT
+    (
+        re.compile(
+            r"\b(art(\.|igo)?\s*477|art(\.|igo)?\s*467|multa\s+(do\s+art(\.|igo)?\s*)?477|"
+            r"multa\s+(do\s+art(\.|igo)?\s*)?467)\b",
+            re.IGNORECASE,
+        ),
+        "Multas dos Artigos 477 e 467 da CLT",
+    ),
 
-    # 6. Verbas Rescisórias e Término Contratual
-    (re.compile(r"\b(verbas?\s+rescis[óo]rias?|aviso\s+pr[ée]vio|saldo\s+de\s+sal[áa]rio|f[ée]rias(\s*(\+|\s*e)\s*1/3)?|d[ée]cimo\s+terceiro|13[º°]\s+sal[áa]rio|rescis[ãa]o\s+indireta|dispensa\s+imotivada|justa\s+causa)\b", re.IGNORECASE), "Verbas Rescisórias"),
+    # 6. Dano Moral, Assédio e Metas Abusivas
+    (
+        re.compile(
+            r"\b(danos?\s+morais?|ass[ée]dio\s+moral|ass[ée]dio\s+sexual|indeniza[çc][ãa]o\s+por\s+dano\s+moral|"
+            r"cobran[çc]a\s+(excessiva\s+)?de\s+metas?|metas\s+abusivas|dano\s+existencial|"
+            r"ofensa\s+[àa]\s+honra|revista\s+[íi]ntima|humilha[çc][ãa]o)\b",
+            re.IGNORECASE,
+        ),
+        "Indenização por Danos Morais e Assédio no Trabalho",
+    ),
 
-    # 7. Multas do Art. 477 e 467 da CLT
-    (re.compile(r"\b(art(\.|igo)?\s*477|art(\.|igo)?\s*467|multa\s+do\s+artigo\s+477|multa\s+do\s+artigo\s+467)\b", re.IGNORECASE), "Multas dos Artigos 477 e 467 da CLT"),
+    # 7. Adicional de Insalubridade e Periculosidade
+    (
+        re.compile(
+            r"\b(adicional\s+de\s+insalubridade|insalubre|grau\s+(m[ée]dio|m[áa]ximo|m[íi]nimo)|agente\s+nocivo|"
+            r"adicional\s+de\s+periculosidade|periculoso|inflam[áa]veis|eletricidade|explosivos|"
+            r"vigilante|transporte\s+de\s+valores|motociclista)\b",
+            re.IGNORECASE,
+        ),
+        "Adicional de Insalubridade e Periculosidade",
+    ),
 
-    # 8. FGTS e Multa de 40%
-    (re.compile(r"\b(fgts|fundo\s+de\s+garantia|dep[óo]sitos?\s+do\s+fgts|multa\s+(de\s+)?40%?|multa\s+rescis[óo]ria)\b", re.IGNORECASE), "FGTS"),
+    # 8. Adicional Noturno
+    (
+        re.compile(
+            r"\b(adicional\s+noturno|trabalho\s+noturno|hora\s+noturna|jornada\s+noturna)\b",
+            re.IGNORECASE,
+        ),
+        "Adicional Noturno e Hora Noturna Reduzida",
+    ),
 
-    # 9. Dano Moral, Assédio e Metas Abusivas
-    (re.compile(r"\b(danos?\s+morais?|ass[ée]dio\s+moral|ass[ée]dio\s+sexual|indeniza[çc][ãa]o\s+por\s+dano\s+moral|cobran[çc]a\s+de\s+metas?|dano\s+existencial|revista\s+[íi]ntima)\b", re.IGNORECASE), "Indenização por Dano Moral"),
+    # 9. Diferenças Salariais, Comissões e Desvio de Função
+    (
+        re.compile(
+            r"\b(diferen[çc]as?\s+salaria(l|is)|comiss[õo]es|estorno\s+de\s+comiss[õo]es|premia[çc][ãa]o|pr[êe]mios|"
+            r"equipara[çc][ãa]o\s+salarial|paradigma|desvio\s+de\s+fun[çc][ãa]o|ac[úu]mulo\s+de\s+fun[çc][ãa]o|"
+            r"sal[áa]rio\s+por\s+fora|sal[áa]rio\s+utilidade|plr|participa[çc][ãa]o\s+nos\s+lucros|"
+            r"vale[ -]refei[çc][ãa]o|vale[ -]alimenta[çc][ãa]o|aux[íi]lio[ -]alimenta[çc][ãa]o|"
+            r"reajuste\s+salarial|piso\s+salarial|conven[çc][ãa]o\s+coletiva)\b",
+            re.IGNORECASE,
+        ),
+        "Diferenças Salariais, Comissões e Desvio de Função",
+    ),
 
-    # 10. Equiparação Salarial e Desvio de Função
-    (re.compile(r"\b(equipara[çc][ãa]o\s+salarial|paradigma|desvio\s+de\s+fun[çc][ãa]o|ac[úu]mulo\s+de\s+fun[çc][ãa]o)\b", re.IGNORECASE), "Equiparação Salarial"),
+    # 10. Terceirização e Responsabilidade Subsidiária (Súmula 331 TST)
+    (
+        re.compile(
+            r"\b(terceiriza[çc][ãa]o|responsabilidade\s+subsidi[áa]ria|s[úu]mula\s+331|tomador(a)?\s+de\s+servi[çc]os?|"
+            r"grupo\s+econ[ôo]mico|sucess[ãa]o\s+empresarial|sucess[ãa]o\s+de\s+empregadores|empresa\s+interposta)\b",
+            re.IGNORECASE,
+        ),
+        "Responsabilidade Subsidiária e Terceirização (Súmula 331 TST)",
+    ),
 
-    # 11. Diferenças Salariais e Remuneração
-    (re.compile(r"\b(diferen[çc]as?\s+salaria(l|is)|comiss[õo]es|estorno\s+de\s+comiss[õo]es|plr|participa[çc][ãa]o\s+nos\s+lucros|vale[ -]refei[çc][ãa]o|vale[ -]alimenta[çc][ãa]o|aux[íi]lio[ -]alimenta[çc][ãa]o)\b", re.IGNORECASE), "Diferenças Salariais e Remuneração"),
+    # 11. Reconhecimento de Vínculo de Emprego / Pejotização
+    (
+        re.compile(
+            r"\b(v[íi]nculo\s+(de\s+emprego|empregat[íi]cio)|pejotiza[çc][ãa]o|anota[çc][ãa]o\s+(na|da)\s+ctps|"
+            r"baixa\s+na\s+ctps|carteira\s+de\s+trabalho|contrato\s+de\s+est[áa]gio\s+nulo|fraude\s+trabalhista)\b",
+            re.IGNORECASE,
+        ),
+        "Reconhecimento de Vínculo de Emprego / Pejotização",
+    ),
 
-    # 12. Terceirização e Responsabilidade Subsidiária
-    (re.compile(r"\b(terceiriza[çc][ãa]o|responsabilidade\s+subsidi[áa]ria|s[úu]mula\s+331|tomador(a)?\s+de\s+servi[çc]os?|grupo\s+econ[ôo]mico|sucess[ãa]o\s+empresarial|sucess[ãa]o\s+de\s+empregadores)\b", re.IGNORECASE), "Terceirização / Resp. Subsidiária"),
+    # 12. Acidente de Trabalho e Doença Ocupacional
+    (
+        re.compile(
+            r"\b(acidente\s+de\s+trabalho|doen[çc]a\s+(ocupacional|profissional)|ler/dort|les[ãa]o\s+por\s+esfor[çc]o\s+repetitivo|"
+            r"estabilidade\s+acident[áa]ria|pens[ãa]o\s+vital[íi]cia|pens[ãa]o\s+mensal|cat\b)\b",
+            re.IGNORECASE,
+        ),
+        "Acidente de Trabalho e Doença Ocupacional",
+    ),
 
-    # 13. Reconhecimento de Vínculo de Emprego
-    (re.compile(r"\b(v[íi]nculo\s+(de\s+emprego|empregat[íi]cio)|pejotiza[çc][ãa]o|anota[çc][ãa]o\s+(na|da)\s+ctps|baixa\s+na\s+ctps|contrato\s+de\s+est[áa]gio\s+nulo)\b", re.IGNORECASE), "Reconhecimento de Vínculo"),
+    # 13. Estabilidade Provisória (Gestante / CIPA / Sindical)
+    (
+        re.compile(
+            r"\b(gestante|estabilidade\s+da\s+gestante|licen[çc]a\s+maternidade|estabilidade\s+sindical|cipeiro|"
+            r"estabilidade\s+cipa|reintegra[çc][ãa]o)\b",
+            re.IGNORECASE,
+        ),
+        "Estabilidade Provisória e Garantia de Emprego (Gestante/CIPA)",
+    ),
 
-    # 14. Acidente de Trabalho e Doença Ocupacional
-    (re.compile(r"\b(acidente\s+de\s+trabalho|doen[çc]a\s+(ocupacional|profissional)|ler/dort|les[ãa]o\s+por\s+esfor[çc]o\s+repetitivo|estabilidade\s+acident[áa]ria|pens[ãa]o\s+vital[íi]cia)\b", re.IGNORECASE), "Acidente de Trabalho / Doença"),
+    # 14. Execução Trabalhista e Fase de Liquidação
+    (
+        re.compile(
+            r"\b(sisbajud|renajud|infojud|bloqueio\s+de\s+(ativos|valores|contas)|penhora|mandado\s+de\s+penhora|"
+            r"c[áa]lculos\s+de\s+liquida[çc][ãa]o|impugna[çc][ãa]o\s+aos\s+c[áa]lculos|execu[çc][ãa]o\s+de\s+t[íi]tulo|"
+            r"cumprimento\s+de\s+senten[çc]a|homologa[çc][ãa]o\s+de\s+c[áa]lculos)\b",
+            re.IGNORECASE,
+        ),
+        "Execução Trabalhista e Cumprimento de Sentença",
+    ),
 
-    # 15. Estabilidade Provisória (Gestante / CIPA / Sindical)
-    (re.compile(r"\b(gestante|estabilidade\s+da\s+gestante|licen[çc]a\s+maternidade|estabilidade\s+sindical|cipeiro|estabilidade\s+cipa)\b", re.IGNORECASE), "Estabilidade da Gestante"),
-
-    # 16. Execução Trabalhista e Fase de Liquidação
-    (re.compile(r"\b(sisbajud|renajud|infojud|bloqueio\s+de\s+ativos|penhora|mandado\s+de\s+penhora|c[áa]lculos\s+de\s+liquida[çc][ãa]o|impugna[çc][ãa]o\s+aos\s+c[áa]lculos|execu[çc][ãa]o\s+de\s+t[íi]tulo|cumprimento\s+de\s+senten[çc]a)\b", re.IGNORECASE), "Execução Trabalhista e Liquidação"),
-
-    # 17. Acordo Homologado e Quitação
-    (re.compile(r"\b(acordo\s+homologado|transa[çc][ãa]o\s+homologada|termo\s+de\s+concilia[çc][ãa]o|quita[çc][ãa]o\s+geral)\b", re.IGNORECASE), "Homologação de Acordo e Conciliação"),
+    # 15. Acordo Homologado e Quitação
+    (
+        re.compile(
+            r"\b(acordo\s+homologado|transa[çc][ãa]o\s+homologada|termo\s+de\s+concilia[çc][ãa]o|quita[çc][ãa]o\s+geral|"
+            r"homologa[çc][ãa]o\s+de\s+acordo)\b",
+            re.IGNORECASE,
+        ),
+        "Homologação de Acordo e Conciliação Trabalhista",
+    ),
 ]
 
 CLASS_INFERENCE_MAP: List[Tuple[str, str]] = [
-    ("RECURSO ORDINÁRIO", "Recurso Ordinário Trabalhista"),
-    ("AGRAVO DE PETIÇÃO", "Agravo de Petição em Execução"),
-    ("SUMARÍSSIMO", "Reclamatória Trabalhista (Rito Sumaríssimo)"),
-    ("ORDINÁRIO", "Reclamatória Trabalhista (Rito Ordinário)"),
-    ("EXECUÇÃO", "Execução Trabalhista"),
+    # Siglas e termos de classes processuais PJe da Justiça do Trabalho (normalizados em ASCII)
+    ("ATORD", "Reclamatória Trabalhista (Rito Ordinário)"),
+    ("ATSUM", "Reclamatória Trabalhista (Rito Sumaríssimo)"),
+    ("ACUM", "Ação de Cumprimento de Cláusula Coletiva"),
+    ("CUMSEN", "Cumprimento de Sentença Trabalhista"),
+    ("EXPROVAS", "Execução Provisória em Autos Suplementares"),
+    ("EXFIS", "Execução Fiscal Trabalhista"),
+    ("ROT", "Recurso Ordinário Trabalhista"),
+    ("AP", "Agravo de Petição em Execução"),
+    ("AIRR", "Agravo de Instrumento em Recurso de Revista (TST)"),
+    ("RR", "Recurso de Revista Trabalhista (TST)"),
+    ("HTE", "Homologação de Transação Extrajudicial"),
+    ("CONPAG", "Consignação em Pagamento"),
+    ("CARTPREC", "Carta Precatória Trabalhista"),
+    ("RECURSO ORDINARIO", "Recurso Ordinário Trabalhista"),
+    ("AGRAVO DE PETICAO", "Agravo de Petição em Execução"),
+    ("AGRAVO DE INSTRUMENTO", "Agravo de Instrumento Trabalhista"),
+    ("RECURSO DE REVISTA", "Recurso de Revista Trabalhista (TST)"),
+    ("SUMARISSIMO", "Reclamatória Trabalhista (Rito Sumaríssimo)"),
+    ("ORDINARIO", "Reclamatória Trabalhista (Rito Ordinário)"),
+    ("EXECUCAO", "Execução Trabalhista e Cumprimento de Sentença"),
     ("CUMPRIMENTO", "Cumprimento de Sentença Trabalhista"),
-    ("MONITÓRIA", "Ação Monitória Trabalhista"),
-    ("CONSIGNAÇÃO", "Consignação em Pagamento"),
-    ("INQUÉRITO", "Inquérito para Apuração de Falta Grave"),
+    ("MONITORIA", "Ação Monitória Trabalhista"),
+    ("CONSIGNACAO", "Consignação em Pagamento"),
+    ("INQUERITO", "Inquérito para Apuração de Falta Grave"),
     ("TUTELA", "Tutela Cautelar / Urgência Trabalhista"),
-    ("MANDADO DE SEGURANÇA", "Mandado de Segurança Trabalhista"),
+    ("MANDADO DE SEGURANCA", "Mandado de Segurança Trabalhista"),
 ]
 
 
@@ -129,14 +273,22 @@ class CNJMetadataOrchestrator:
     def __init__(self):
         self.comunica_url = os.getenv("COMUNICA_PJE_URL", "https://comunicaapi.pje.jus.br/api/v1/comunicacao")
         self.datajud_base_url = os.getenv("DATAJUD_BASE_URL", "https://api-publica.datajud.cnj.jus.br")
-        self.datajud_key = os.getenv("DATAJUD_API_KEY", "")
+        default_key = "cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw=="
+        raw_key = os.getenv("DATAJUD_API_KEY")
+        self.datajud_key = raw_key.strip() if (raw_key and raw_key.strip()) else default_key
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) RadarJus/2.0 (Compliance Monitor)"
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json",
         })
         self._cache = {}
         self.ai_analyzer = LegalAIAnalyzer()
         self.predictor = BayesianRiskPredictor()
+        from app.services.cnj_searcher import CNJProcessSearcher
+        self.searcher = CNJProcessSearcher(session=self.session)
 
     def classify_text_decision_detailed(self, text: str) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -202,28 +354,37 @@ class CNJMetadataOrchestrator:
         current_subjects: List[str],
         pje_texts: List[str],
         pje_classes: Optional[List[str]] = None,
+        tipos_doc: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[str]]:
         """
-        Caso os assuntos oficiais do DataJud contenham apenas 'Outros Assuntos' ou categorias genéricas,
-        inspeciona o conteúdo das publicações e classes processuais do PJe para inferir o motivo real do processo
-        e adicionar uma observação detalhada para auditoria jurídica.
+        Inspeciona o conteúdo das publicações, classes processuais e movimentações para inferir
+        o motivo/causa de pedir real do processo quando os metadados forem genéricos ou ausentes.
         """
-        combined_text = " ".join(pje_texts).lower()
-        is_generic = (
-            not current_subjects or
-            all(
-                any(g in s.lower() for g in ["outros", "não especificado", "generico", "motivos trabalhistas"])
-                for s in current_subjects
-            )
-        )
+        generic_tokens = [
+            "outros", "não especificado", "nao especificado", "generico",
+            "motivos trabalhistas", "direito do trabalho", "direito processual",
+            "processo do trabalho", "atos processuais"
+        ]
 
-        if not is_generic:
-            return current_subjects, None
+        # 1. Filtra assuntos oficiais que já sejam específicos e informativos
+        valid_specific_subjects = [
+            s for s in (current_subjects or [])
+            if not any(token in s.lower() for token in generic_tokens)
+        ]
+        if valid_specific_subjects:
+            return valid_specific_subjects, None
 
-        # 1. Procura nos textos por assuntos trabalhistas conhecidos (coleta todos os temas identificados)
+        # 2. Prepara texto concatenado e limpo (sem tags HTML e com entidades decodificadas)
+        raw_items = list(pje_texts or []) + list(tipos_doc or [])
+        cleaned_pieces = [clean_text_for_inference(t) for t in raw_items if t]
+        combined_text = " ".join(cleaned_pieces)
+        unaccented_text = remove_accents(combined_text)
+        search_corpus = f"{combined_text} {unaccented_text}"
+
+        # 3. Procura por causas de pedir substantivas nos textos de publicações e andamentos
         matched_labels = []
         for pattern, label in SUBJECT_INFERENCE_PATTERNS:
-            if pattern.search(combined_text):
+            if pattern.search(search_corpus):
                 if label not in matched_labels:
                     matched_labels.append(label)
 
@@ -231,37 +392,42 @@ class CNJMetadataOrchestrator:
             primary_label = matched_labels[0]
             observation = (
                 f"Assunto identificado via publicação PJe: '{primary_label}'. "
-                f"(Metadados oficiais DataJud indicavam apenas 'Outros Assuntos')."
+                f"(Metadados oficiais indicavam apenas assuntos genéricos)."
             )
-            inferred_list = [f"{label} (Inferido via PJe)" for label in matched_labels]
-            return inferred_list, observation
+            return matched_labels, observation
 
-        # 2. Se os padrões não bateram mas temos classes processuais PJe, infere a partir da classe
+        # 4. Se os textos forem concisos, infere a partir da classe processual PJe (ex: ATSum, ATOrd, CumSen, ROT)
         if pje_classes:
             combined_classes = " ".join(pje_classes).upper()
+            cleaned_classes = re.sub(r"[^A-Z0-9\s]", " ", remove_accents(combined_classes))
             for key, class_label in CLASS_INFERENCE_MAP:
-                if key in combined_classes:
+                norm_key = remove_accents(key.upper())
+                if re.search(r"\b" + re.escape(norm_key) + r"\b", cleaned_classes) or norm_key in cleaned_classes:
                     obs = f"Causa inferida a partir da classe processual PJe: '{class_label}'."
-                    return [f"{class_label} (Inferido via PJe)"], obs
+                    return [class_label], obs
 
-        # 3. Análise semântica complementar dos termos da publicação para não agrupar cegamente
-        if re.search(r"\b(audi[êe]ncia|instru[çc][ãa]o|testemunha|per[íi]cia)\b", combined_text):
-            label = "Instrução Probatória e Perícias"
-            return [f"{label} (Inferido via PJe)"], f"Causa em fase instrutória identificada no texto PJe: '{label}'."
+        # 5. Análise semântica complementar dos termos da publicação para não agrupar cegamente
+        if re.search(r"\b(laudo|perici(a|al)|quesitos|perito)\b", search_corpus, re.IGNORECASE):
+            label = "Perícia Técnica Trabalhista"
+            return [label], f"Fase pericial identificada no texto PJe: '{label}'."
 
-        if re.search(r"\b(execu[çc][ãa]o|penhora|bloqueio|c[áa]lculos|alvar[áa])\b", combined_text):
-            label = "Execução Trabalhista e Liquidação"
-            return [f"{label} (Inferido via PJe)"], f"Fase executória/satisfativa identificada no texto PJe: '{label}'."
+        if re.search(r"\b(audiencia|instrucao|testemunha)\b", search_corpus, re.IGNORECASE):
+            label = "Instrução Probatória e Audiências"
+            return [label], f"Causa em fase instrutória identificada no texto PJe: '{label}'."
 
-        if re.search(r"\b(recurso|ac[óo]rd[ãa]o|turma|tribunal)\b", combined_text):
+        if re.search(r"\b(execucao|penhora|bloqueio|calculos|alvara|liquidacao)\b", search_corpus, re.IGNORECASE):
+            label = "Execução Trabalhista e Cumprimento de Sentença"
+            return [label], f"Fase executória identificada no texto PJe: '{label}'."
+
+        if re.search(r"\b(recurso|acordao|turma|tribunal|agravo)\b", search_corpus, re.IGNORECASE):
             label = "Fase Recursal Trabalhista"
-            return [f"{label} (Inferido via PJe)"], f"Fase recursal identificada no texto PJe: '{label}'."
+            return [label], f"Fase recursal identificada no texto PJe: '{label}'."
 
-        if re.search(r"\b(despacho|notifica[çc][ãa]o|intima[çc][ãa]o|cita[çc][ãa]o)\b", combined_text):
+        if re.search(r"\b(despacho|notificacao|intimacao|citacao)\b", search_corpus, re.IGNORECASE):
             label = "Obrigações Trabalhistas em Tramitação"
-            return [f"{label} (Inferido via PJe)"], f"Processo trabalhista ativo em fase de intimação/despacho: '{label}'."
+            return [label], f"Processo ativo em fase de intimação/despacho: '{label}'."
 
-        return current_subjects or ["Outros Motivos Trabalhistas"], None
+        return ["Outros Motivos Trabalhistas"], None
 
     @staticmethod
     def normalize_court(sigla: str, num_proc: str = "") -> str:
@@ -290,86 +456,36 @@ class CNJMetadataOrchestrator:
     def _fetch_comunica_pje(
         self,
         company_query: str,
-        max_pages: int = 3,
-        page_size: int = 100,
-    ) -> Dict[str, Any]:
+        max_pages: int = 2,
+        page_size: int = 50,
+        fast_path: bool = False,
+    ) -> Any:
         """
         Coleta publicações no Comunica PJe com controle de taxa e suporte a CNPJ.
-        Utiliza itensPorPagina=100 (teto oficial da API) para maximizar a captura
-        de processos reais em pouquíssimas requisições HTTP.
+        Utiliza itensPorPagina <= 50 (limite máximo e estrito da API do CNJ).
         """
-        # Triangulação de CNPJ via BrasilAPI
+        official_name = ""
         if is_cnpj(company_query):
-            official_name = fetch_cnpj_brasilapi(company_query)
-            if official_name:
-                company_query = official_name
+            official_name = fetch_cnpj_brasilapi(company_query) or ""
+        else:
+            from app.services.economic_service import find_company_cnpj_by_name
+            reg = find_company_cnpj_by_name(company_query)
+            if reg and reg.get("razao_social"):
+                official_name = reg["razao_social"]
 
-        sanitized_name = sanitize_company_name(company_query)
-        search_term = sanitized_name if sanitized_name else company_query
+        brand_term = extract_brand_search_term(
+            raw_input=company_query,
+            razao_social=official_name,
+            nome_fantasia=company_query if not is_cnpj(company_query) else "",
+        )
 
-        processes_map = {}
-        has_more = False
-
-        for page in range(1, max_pages + 1):
-            RateLimiter.comunica_pje.acquire(tokens=1.0, block=False)
-
-            try:
-                resp = self.session.get(
-                    self.comunica_url,
-                    params={
-                        "nomeParte": search_term,
-                        "itensPorPagina": page_size,
-                        "pagina": page,
-                    },
-                    timeout=4.5,
-                )
-                if not resp.ok:
-                    break
-                items = resp.json().get("items", [])
-                if not items:
-                    has_more = False
-                    break
-            except Exception as exc:
-                logger.warning("Falha ao consultar Comunica PJe para '%s': %s", search_term, exc)
-                break
-
-            for item in items:
-                num_raw = item.get("numero_processo") or item.get("numeroProcesso") or ""
-                num_proc = "".join(filter(str.isdigit, str(num_raw)))
-                tribunal = (item.get("siglaTribunal") or "").lower().strip()
-                texto = item.get("texto") or ""
-                nome_classe = item.get("nomeClasse") or ""
-                tipo_doc = item.get("tipoDocumento") or ""
-                data_pub = item.get("dataDisponibilizacao") or item.get("dataPublicacao") or ""
-
-                if len(num_proc) != 20 or not tribunal:
-                    continue
-
-                if num_proc not in processes_map:
-                    processes_map[num_proc] = {
-                        "numero_processo": num_proc,
-                        "tribunal": tribunal,
-                        "textos_pje": [texto] if texto else [],
-                        "classes_pje": [nome_classe] if nome_classe else [],
-                        "tipos_doc_pje": [tipo_doc] if tipo_doc else [],
-                        "data_publicacao": data_pub,
-                    }
-                else:
-                    if texto and texto not in processes_map[num_proc]["textos_pje"]:
-                        processes_map[num_proc]["textos_pje"].append(texto)
-                    if nome_classe and nome_classe not in processes_map[num_proc]["classes_pje"]:
-                        processes_map[num_proc]["classes_pje"].append(nome_classe)
-                    if tipo_doc and tipo_doc not in processes_map[num_proc]["tipos_doc_pje"]:
-                        processes_map[num_proc]["tipos_doc_pje"].append(tipo_doc)
-
-            if len(items) < page_size:
-                has_more = False
-                break
-            else:
-                has_more = True
-
-        self._last_fetch_has_more = has_more
-        return processes_map
+        self.searcher.session = self.session
+        self.searcher.datajud_key = self.datajud_key
+        if fast_path:
+            return self.searcher.fetch_single_comunica_page(brand_term, page_num=1, timeout=5.0)
+        procs, disc = self.searcher.fetch_comunica_pje_all_branches(brand_term, max_pages=max_pages if max_pages > 2 else 10)
+        self.last_discovered_entities = list(disc)
+        return procs
 
     def _query_datajud_tribunal(
         self,
@@ -381,7 +497,7 @@ class CNJMetadataOrchestrator:
         """Executa consulta em lote para um tribunal no Elasticsearch do DataJud."""
         endpoint = f"{self.datajud_base_url}/api_publica_{tribunal}/_search"
         must_clauses = [
-            {"terms": {"numeroProcesso": proc_numbers[:500]}}
+            {"terms": {"numeroProcesso": proc_numbers[:50]}}
         ]
         if since_date:
             must_clauses.append({
@@ -391,26 +507,16 @@ class CNJMetadataOrchestrator:
             })
 
         payload = {
-            "size": len(proc_numbers),
-            "_source": [
-                "numeroProcesso",
-                "assuntos",
-                "nivelSigilo",
-                "movimentos",
-                "dataHoraUltimaAtualizacao",
-                "grau"
-            ],
-            "query": {"bool": {"must": must_clauses}} if since_date else {"terms": {"numeroProcesso": proc_numbers[:500]}}
+            "size": len(proc_numbers[:50]),
+            "query": {"bool": {"must": must_clauses}} if since_date else {"terms": {"numeroProcesso": proc_numbers[:50]}}
         }
 
-        RateLimiter.datajud.acquire(tokens=1.0, block=False)
-
         try:
-            resp = self.session.post(endpoint, json=payload, headers=headers, timeout=(1.5, 3.0))
+            resp = self.session.post(endpoint, json=payload, headers=headers, timeout=25)
             if resp.ok:
                 return resp.json().get("hits", {}).get("hits", [])
         except Exception as exc:
-            logger.debug("Consulta ao tribunal '%s' no DataJud rápida sem bloqueio: %s", tribunal, exc)
+            logger.debug("Consulta ao tribunal '%s' no DataJud rápida: %s", tribunal, exc)
 
         return []
 
@@ -420,119 +526,12 @@ class CNJMetadataOrchestrator:
         since_date: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Enriquece os processos em paralelo com o DataJud utilizando ThreadPoolExecutor
-        com tribunais normalizados para tempo de resposta < 1.5s.
+        Enriquece os processos com o DataJud utilizando busca otimizada
+        agrupada nos Top Tribunais (timeout 6.0s) e fallback semântico do Comunica PJe.
         """
-        by_tribunal = defaultdict(list)
-        for num_proc, info in processes_map.items():
-            norm_court = self.normalize_court(info.get("tribunal"), num_proc)
-            by_tribunal[norm_court].append(num_proc)
-
-        enriched_by_number = {}
-        for num_proc, info in processes_map.items():
-            pje_texts = info.get("textos_pje", [])
-            pje_classes = info.get("classes_pje", [])
-            combined_pje = " ".join(pje_texts)
-            decision_from_text, sub_decision_from_text = self.classify_text_decision_detailed(combined_pje)
-            has_expert_text = self.detect_expert_report_in_text(combined_pje)
-            norm_court = self.normalize_court(info.get("tribunal"), num_proc)
-
-            inferred_subs, obs = self.infer_subject_and_observation([], pje_texts, pje_classes)
-            primary_sub = inferred_subs[0] if inferred_subs else "Outros Motivos Trabalhistas"
-
-            enriched_by_number[num_proc] = {
-                "numero_processo": num_proc,
-                "tribunal": norm_court,
-                "grau": "G1",
-                "subjects": inferred_subs,
-                "primary_subject": primary_sub,
-                "primary_subject_code": None,
-                "nivelSigilo": 0,
-                "nivel_sigilo": 0,
-                "sentence_outcome": decision_from_text or "em_aberto",
-                "sentence_sub_outcome": sub_decision_from_text,
-                "has_expert_report": has_expert_text,
-                "observation": obs,
-                "dataHoraUltimaAtualizacao": info.get("data_publicacao", ""),
-                "movimentos": [],
-                "raw_metadata": None,
-            }
-
-        headers = {
-            "Authorization": f"APIKey {self.datajud_key}",
-            "Content-Type": "application/json",
-        }
-
-        # Paraleliza a consulta aos tribunais no DataJud para tempo de resposta < 3 segundos
-        max_workers = min(16, max(1, len(by_tribunal)))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_tribunal = {
-                executor.submit(
-                    self._query_datajud_tribunal, tribunal, proc_numbers, headers, since_date
-                ): tribunal
-                for tribunal, proc_numbers in by_tribunal.items()
-            }
-
-            for future in as_completed(future_to_tribunal):
-                tribunal = future_to_tribunal[future]
-                try:
-                    hits = future.result()
-                except Exception as exc:
-                    logger.debug("Falha na consulta paralela do tribunal %s: %s", tribunal, exc)
-                    hits = []
-
-                for hit in hits:
-                    src = hit.get("_source", {})
-                    num = src.get("numeroProcesso")
-                    if num not in enriched_by_number:
-                        continue
-
-                    entry = enriched_by_number[num]
-                    raw_assuntos = src.get("assuntos") or []
-                    subjects = [
-                        a.get("nome") for a in raw_assuntos if isinstance(a, dict) and a.get("nome")
-                    ]
-                    subject_codes = [
-                        safe_int(a.get("codigo"))
-                        for a in raw_assuntos
-                        if isinstance(a, dict) and safe_int(a.get("codigo")) is not None
-                    ]
-
-                    # Inspeciona texto PJe se os assuntos oficiais forem genéricos
-                    pje_texts = processes_map.get(num, {}).get("textos_pje", [])
-                    pje_classes = processes_map.get(num, {}).get("classes_pje", [])
-                    subjects, observation = self.infer_subject_and_observation(subjects, pje_texts, pje_classes)
-
-                    # Análise de movimentos TPU
-                    movimentos = src.get("movimentos") or []
-                    mov_analysis = self.parse_datajud_movements(movimentos)
-
-                    outcome = mov_analysis["outcome"]
-                    sub_outcome = mov_analysis.get("sub_outcome")
-                    if outcome == "em_aberto" and entry["sentence_outcome"] != "em_aberto":
-                        outcome = entry["sentence_outcome"]
-                        sub_outcome = entry.get("sentence_sub_outcome")
-
-                    has_expert = mov_analysis["has_expert_report"] or entry["has_expert_report"]
-                    sigilo_val = safe_int(src.get("nivelSigilo"), default=0) or 0
-
-                    entry.update({
-                        "subjects": subjects,
-                        "primary_subject": subjects[0] if subjects else entry["primary_subject"],
-                        "primary_subject_code": subject_codes[0] if subject_codes else None,
-                        "nivelSigilo": sigilo_val,
-                        "nivel_sigilo": sigilo_val,
-                        "sentence_outcome": outcome,
-                        "sentence_sub_outcome": sub_outcome,
-                        "has_expert_report": has_expert,
-                        "observation": observation or entry["observation"],
-                        "grau": src.get("grau", "G1"),
-                        "dataHoraUltimaAtualizacao": src.get("dataHoraUltimaAtualizacao") or entry["dataHoraUltimaAtualizacao"],
-                        "movimentos": movimentos,
-                        "raw_metadata": src,
-                    })
-
-        return list(enriched_by_number.values())
+        self.searcher.session = self.session
+        self.searcher.datajud_key = self.datajud_key
+        return self.searcher.enrich_top_tribunals_datajud(processes_map, max_tribunals=3, timeout=6.0)
 
     def _calculate_metrics(
         self,
@@ -556,26 +555,36 @@ class CNJMetadataOrchestrator:
         company_name: str,
         fast_path: bool = False,
         limit_processes: int = 100,
+        search_strategy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Executa a análise da empresa com dados reais completos.
-        - Utiliza page_size=100 para trazer todos os processos em lote rápido.
-        - Se fast_path=True: busca até 2 páginas (200 publicações) de forma rápida.
-          Se a empresa tiver menos de 100 publicações, o resultado vem 100% completo na 1ª requisição!
-        - Se fast_path=False: varredura completa até 6 páginas (600 publicações).
+        - Se fast_path=True: busca rápida (< 3s na primeira página).
+        - Se fast_path=False: Deep Scan em segundo plano varrendo em paralelo até 12 páginas (até 600 publicações)
+          para capturar todas as filiais e empresas vinculadas do grupo.
         """
         cache_key = company_name.strip().lower()
         if not fast_path and cache_key in self._cache:
             return self._cache[cache_key]
 
-        max_pages = 2 if fast_path else 6
-        page_size = 100
+        max_pages = 1 if fast_path else 12
+        discovered_entities: List[str] = []
 
-        # 1. Coleta processos no Comunica PJe
-        processes_map = self._fetch_comunica_pje(company_name, max_pages=max_pages, page_size=page_size)
+        query_term = None
+        if search_strategy and search_strategy.get("comunica_query_term"):
+            query_term = search_strategy["comunica_query_term"]
+
+        if fast_path and query_term:
+            processes_map = self.searcher.fetch_single_comunica_page(query_term, page_num=1, timeout=5.0) or {}
+        else:
+            search_input = query_term or company_name
+            processes_map = self._fetch_comunica_pje(search_input, max_pages=max_pages, fast_path=fast_path) or {}
+        
+        discovered_entities = getattr(self, "last_discovered_entities", [])
 
         if not processes_map:
             empty_res = self._calculate_metrics(company_name, [], scan_status="COMPLETED")
+            empty_res["discovered_entities"] = discovered_entities
             empty_res["ai_analysis"] = self.ai_analyzer.analyze_company(
                 {"empresa": company_name, "total_processos": 0}
             )
@@ -583,13 +592,24 @@ class CNJMetadataOrchestrator:
                 self._cache[cache_key] = empty_res
             return empty_res
 
-        # 2. Enriquecimento no DataJud (em paralelo por tribunal)
-        processes = self._enrich_with_datajud(processes_map)
+        # 2. Enriquecimento:
+        if fast_path:
+            # REGRA 2: Fast Path Ultra-Rápido (< 2s)
+            # NÃO chama DataJud! Processa os itens da página 1 via _merge_process_data_fast em ~1ms
+            processes = [
+                self.searcher._merge_process_data_fast(cnj, com_data if isinstance(com_data, dict) else {}, None)
+                for cnj, com_data in processes_map.items()
+            ]
+        else:
+            # REGRA 3: Deep Scan com Time-Boxing Rígido (Top 3 tribunais, timeout 6.0s)
+            processes = self._enrich_with_datajud(processes_map)
 
         # 3. Cálculo de métricas via BayesianRiskPredictor
-        has_more = getattr(self, "_last_fetch_has_more", False)
+        # CRITÉRIO DE PARADA CORRETO: verifica se a página bruta tinha 50 itens
+        has_more = getattr(self.searcher, "last_page_has_more", False) or len(processes_map) >= 50
         status = "PARTIAL_FAST_PATH" if (fast_path and has_more) else "COMPLETED"
         metrics = self._calculate_metrics(company_name, processes, scan_status=status)
+        metrics["discovered_entities"] = discovered_entities
 
         # 4. Geração de parecer de IA (radarjusAgent ADK)
         ai_result = self.ai_analyzer.analyze_company(metrics)
@@ -599,3 +619,4 @@ class CNJMetadataOrchestrator:
             self._cache[cache_key] = metrics
 
         return metrics
+
