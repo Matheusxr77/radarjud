@@ -6,3 +6,12 @@
 
 /* Estados vazios permanentes para Visão geral, Processos e Estimativas */
 .empty-workspace .info-banner{align-items:flex-start}.empty-workspace .info-banner>div{flex:1}.empty-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:17px}.empty-workspace .panel .empty{min-height:190px;justify-content:center}.empty-workspace .stat strong{color:#a5b0ba}.empty-workspace .two-col{align-items:stretch}@media(max-width:620px){.empty-actions{flex-direction:column}.empty-actions button{width:100%}}
+
+
+/* Estilos de Logotipo e Idoneidade Econômica */
+.company-logo-wrapper{flex-shrink:0}
+.company-logo-img{width:48px;height:48px;object-fit:contain;border-radius:12px;background:#fff;border:1px solid #dbe2e8;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.05)}
+.company-logo-fallback{width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#245a81,#142335);color:#fff;display:grid;place-items:center;font-size:15px;font-weight:800;letter-spacing:.5px;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.econ-badge{padding:14px;background:#f5f8fa;border:1px solid #e5eaef;border-radius:10px;display:flex;flex-direction:column;gap:5px}
+.econ-badge small{color:#68798a;font-size:11px;line-height:1.4}
+.econ-badge strong{color:#245a81;font-size:15px;font-weight:700}

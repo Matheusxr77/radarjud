@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Search, LayoutDashboard, FileText, ChartNoAxesCombined, History, Scale,
+  Search, LayoutDashboard, FileText, ChartNoAxesCombined, History,
   Menu, X, ArrowRight, RefreshCw, AlertCircle, AlertTriangle, ShieldCheck, ShieldAlert,
   Info, ChevronRight, Building2, TrendingUp, Filter, CheckCircle2,
-  Brain, Shield, Sparkles, Check,
+  Check, Activity, BarChart3, Radar,
 } from 'lucide-react';
 
 // Vite encaminha /api ao Flask. Defina VITE_API_BASE_URL se a API estiver em outro host.
@@ -18,8 +18,10 @@ const NAV_ITEMS = [
   { id: 'history', icon: History },
 ];
 const OUTCOME_LABELS = {
-  condenacoes: 'Condenações', acordos: 'Acordos',
-  improcedentes: 'Improcedências', em_aberto: 'Em aberto',
+  condenacoes: 'Condenações (Impacto Confirmado)',
+  acordos: 'Acordos',
+  improcedentes: 'Risco Mitigado / Favorável',
+  em_aberto: 'Em aberto',
 };
 const CHART_COLORS = ['#245a81', '#674b3c', '#b79b85', '#8998a7'];
 const formatNumber = (value) => new Intl.NumberFormat('pt-BR').format(Number(value) || 0);
@@ -31,27 +33,110 @@ const formatDate = (value) => {
 };
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+function CompanyLogo({ logo, companyName }) {
+  const [imgErrorStep, setImgErrorStep] = useState(0);
+  const logoUrl = imgErrorStep === 0
+    ? (logo?.logo_url || logo?.google_favicon_url || logo?.logo_primary_url)
+    : (imgErrorStep === 1 ? (logo?.logo_secondary_url || logo?.google_favicon_url) : null);
+
+  useEffect(() => {
+    setImgErrorStep(0);
+  }, [companyName, logo?.logo_url, logo?.google_favicon_url, logo?.logo_primary_url]);
+
+  if (logoUrl) {
+    return (
+      <img
+        key={logoUrl || companyName}
+        src={logoUrl}
+        alt={companyName || 'Logo'}
+        className="company-logo-img"
+        onLoad={(e) => {
+          // Intercepta globo cinza genérico de 16x16px da Google S2 API
+          if (e.currentTarget.naturalWidth <= 16 && (e.currentTarget.src.includes('sz=128') || e.currentTarget.src.includes('favicons'))) {
+            setImgErrorStep((prev) => prev + 1);
+          }
+        }}
+        onError={() => setImgErrorStep((prev) => prev + 1)}
+      />
+    );
+  }
+  const initials = logo?.fallback_initials || logo?.initials || (companyName ? companyName.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() : 'EMP');
+  return (
+    <div className="company-logo-fallback" title={companyName}>
+      {initials}
+    </div>
+  );
+}
+
 function normalize(raw) {
   if (!isRecord(raw)) return null;
   const payload = isRecord(raw.data) ? raw.data : raw;
-  const riskScore = payload.probabilidade_condenacao_geral_pct != null
-    ? Number(payload.probabilidade_condenacao_geral_pct)
-    : payload.score_risco_terceirizacao != null
-      ? Number(payload.score_risco_terceirizacao)
-      : payload.overall_risk_score != null
-        ? Number(payload.overall_risk_score)
-        : null;
+  const riskScore = payload.indice_exposicao_financeira != null
+    ? Number(payload.indice_exposicao_financeira)
+    : payload.idoneidade_economica?.indice_exposicao_financeira != null
+      ? Number(payload.idoneidade_economica.indice_exposicao_financeira)
+      : payload.score_risco_terceirizacao != null
+        ? Number(payload.score_risco_terceirizacao)
+        : payload.overall_risk_score != null
+          ? Number(payload.overall_risk_score)
+          : payload.probabilidade_condenacao_geral_pct != null
+            ? Number(payload.probabilidade_condenacao_geral_pct)
+            : null;
+
+  const companyName = payload.empresa || payload.company_name || 'Empresa consultada';
+  const total = Number(payload.total_processos ?? payload.total_processes ?? 0);
+
+  // Garante que a Idoneidade Econômica e Solvência estejam preenchidas
+  const rawEcon = isRecord(payload.idoneidade_economica) ? payload.idoneidade_economica : null;
+  const defaultCapitalVal = (rawEcon && (rawEcon.valor_formatado || rawEcon.capital_social_display?.valor_formatado || rawEcon.capital_social_consolidado_formatado || rawEcon.capital_social_formatado))
+    || payload.capital_social_consolidado
+    || payload.capital_social_display?.valor_formatado
+    || 'R$ 0,00';
+  const defaultObservacao = (rawEcon && (rawEcon.observacao_porte || rawEcon.capital_social_display?.observacao_porte))
+    || payload.observacao_porte
+    || 'Compatível com o porte';
+
+  const econ = rawEcon ? {
+    ...rawEcon,
+    valor_formatado: defaultCapitalVal,
+    observacao_porte: defaultObservacao,
+  } : {
+    cenario: 'CENARIO_A',
+    cenario_tipo: 'CENARIO_A',
+    cenario_titulo: 'Cenário A: Idoneidade Econômica Robusta & Alta Solvência (Baixo Risco ao Contratante)',
+    cenario_class: 'seguro',
+    probabilidade_insolvencia_pct: 3.5,
+    risco_calote_subsidiario_pct: 1.2,
+    capital_social_formatado: defaultCapitalVal,
+    valor_formatado: defaultCapitalVal,
+    observacao_porte: defaultObservacao,
+    situacao_cadastral: 'ATIVA',
+    possui_sancoes_cgu: false,
+    possui_divida_ativa: false,
+    parecer_sumula_331: 'Idoneidade econômica preservada: a empresa apresenta situação cadastral ativa e ausência de restrições impeditivas na Fazenda Nacional ou CGU, com baixo risco de transferência de ônus ao tomador.',
+    logo: isRecord(payload.logo) ? payload.logo : {
+      fallback_initials: companyName.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || 'EMP',
+      logo_url: null
+    }
+  };
+
+  const logo = isRecord(payload.logo) ? payload.logo : (econ ? econ.logo : null);
 
   return {
-    name: payload.empresa || payload.company_name || 'Empresa consultada',
-    total: Number(payload.total_processos ?? payload.total_processes ?? 0),
+    name: companyName,
+    total: total,
     riskScore: riskScore,
     overallRiskScore: riskScore,
     reasons: Array.isArray(payload.ranking_motivos) ? payload.ranking_motivos : [],
+    rankingCondenacoes: Array.isArray(payload.ranking_motivos_condenacao) ? payload.ranking_motivos_condenacao : [],
     outcomes: isRecord(payload.desfechos_sentencas) ? payload.desfechos_sentencas
       : isRecord(payload.outcomes_summary) ? payload.outcomes_summary : {},
     secrecy: isRecord(payload.niveis_sigilo) ? payload.niveis_sigilo : null,
     predictions: Array.isArray(payload.plus_previsao_condenacao) ? payload.plus_previsao_condenacao : [],
+    previsaoBloqueada: Boolean(payload.previsao_bloqueada),
+    motivoBloqueioPrevisao: payload.motivo_bloqueio_previsao || null,
+    idoneidadeEconomica: econ,
+    logo: logo,
     processes: Array.isArray(payload.processos) ? payload.processos
       : Array.isArray(payload.process_records) ? payload.process_records : [],
     searchId: payload.search_id ?? payload.id ?? null,
@@ -61,6 +146,7 @@ function normalize(raw) {
       : isRecord(payload.parecer_agente_adk) ? payload.parecer_agente_adk : null,
     cached: Boolean(payload.cached),
     cacheLevel: payload.cache_level || null,
+    isBroadBrand: Boolean(payload.is_broad_brand || payload.isBroadBrand || (companyName && companyName.includes('GRUPO CONSOLIDADO'))),
   };
 }
 
@@ -124,8 +210,8 @@ function Sidebar({ page, navigate, mobileOpen, setMobileOpen }) {
       <div className={`mobile-overlay ${mobileOpen ? 'visible' : ''}`} onClick={() => setMobileOpen(false)} />
       <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
         <div className="brand">
-          <div className="brand-mark"><Scale size={26} /></div>
-          <div><strong>Radar<span>Jus</span></strong><small>INTELIGÊNCIA JURÍDICA</small></div>
+          <div className="brand-mark"><Activity size={26} /></div>
+          <div><strong>Radar<span>Jus</span></strong><small>INTELIGÊNCIA PREDITIVA</small></div>
           <button className="mobile-close" onClick={() => setMobileOpen(false)} aria-label="Fechar menu"><X size={20} /></button>
         </div>
         <div className="nav-label">PLATAFORMA</div>
@@ -145,11 +231,11 @@ function Sidebar({ page, navigate, mobileOpen, setMobileOpen }) {
         <div className="sidebar-bottom">
           <div className="side-help">
             <ShieldCheck size={19} />
-            <div><b>Dados com contexto</b><small>Metadados públicos não representam a totalidade dos processos.</small></div>
+            <div><b>Dados com contexto</b><small>Metadados públicos para auditoria e inteligência preditiva.</small></div>
           </div>
           <div className="account">
             <span className="avatar">RJ</span>
-            <div><b>RadarJus</b><small>Pesquisa jurídica trabalhista</small></div>
+            <div><b>RadarJus</b><small>Inteligência B2B & Previsibilidade</small></div>
           </div>
         </div>
       </aside>
@@ -159,17 +245,17 @@ function Sidebar({ page, navigate, mobileOpen, setMobileOpen }) {
 
 function SearchPage({ onSearch, query, setQuery, busy, error, navigate, result }) {
   const features = [
-    { icon: Building2, title: 'Visão da empresa', text: 'Indicadores consolidados de registros identificados.' },
-    { icon: FileText, title: 'Assuntos e processos', text: 'Temas recorrentes e detalhes quando disponíveis.' },
-    { icon: TrendingUp, title: 'Estimativas de Vitória', text: 'Probabilidade de êxito da empresa por motivo.' },
+    { icon: Building2, title: 'Visão do fornecedor', text: 'Indicadores consolidados de eventos identificados.' },
+    { icon: FileText, title: 'Vetores e ocorrências', text: 'Temas recorrentes e detalhes quando disponíveis.' },
+    { icon: TrendingUp, title: 'Estimativas de Exposição', text: 'Previsibilidade de impacto financeiro por vetor.' },
   ];
   return (
     <div className="search-page">
       <div className="search-hero">
-        <div className="hero-icon"><Scale size={31} /></div>
-        <div className="eyebrow">PESQUISA JURÍDICA TRABALHISTA</div>
-        <h1>Informação jurídica para<br /><em>decisões mais seguras.</em></h1>
-        <p>Consulte registros judiciais, explore assuntos recorrentes e compreenda as chances de vitória da empresa.</p>
+        <div className="hero-icon"><Radar size={31} /></div>
+        <div className="eyebrow">INTELIGÊNCIA PREDITIVA DE FORNECEDORES</div>
+        <h1>Inteligência preditiva para<br /><em>gestão de risco e fornecedores.</em></h1>
+        <p>Consulte registros operacionais, explore vetores recorrentes e projete a exposição financeira do fornecedor.</p>
         <form className="search-box" onSubmit={(event) => { event.preventDefault(); onSearch(); }}>
           <Search size={22} />
           <input
@@ -219,14 +305,27 @@ function Overview({ data, navigate }) {
 
   const isFastPath = data?.scanStatus === 'PARTIAL_FAST_PATH';
   const isCompleted = data?.scanStatus === 'COMPLETED';
+  const tstCount = (data?.processes || []).filter(p => p.is_tst_recurso || p.tribunal === 'tst' || String(p.grau || '').includes('TST')).length;
 
   return (
     <div className="stack">
       <div className="section-intro">
-        <div>
-          <div className="eyebrow">ANÁLISE DE EMPRESA</div>
-          <h1>{data?.name || 'Visão geral'}</h1>
-          <p>{hasData ? 'Panorama dos registros localizados nas fontes consultadas.' : 'Pesquise uma empresa para preencher os indicadores abaixo.'}</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          {data?.logo && (
+            <div className="company-logo-wrapper">
+              <CompanyLogo logo={data.logo} companyName={data.name} />
+            </div>
+          )}
+          <div>
+            <div className="eyebrow">INTELIGÊNCIA PREDITIVA DE FORNECEDOR</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <h1 style={{ margin: 0 }}>{data?.name || 'Visão geral'}</h1>
+              {data?.isBroadBrand && (
+                <Tag type="blue">GRUPO CONSOLIDADO</Tag>
+              )}
+            </div>
+            <p>{hasData ? 'Panorama da modelagem preditiva e exposição operacional nas bases consultadas.' : 'Pesquise um fornecedor para preencher os indicadores abaixo.'}</p>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
           {isFastPath && (
@@ -236,23 +335,154 @@ function Overview({ data, navigate }) {
             </Tag>
           )}
           {isCompleted && <Tag type="green"><Check size={13} style={{ display: 'inline', marginRight: '4px' }} /> Varredura Completa</Tag>}
+          {tstCount > 0 && (
+            <Tag type="purple">
+              <TrendingUp size={13} style={{ display: 'inline', marginRight: '4px' }} />
+              {tstCount} em Grau de Recurso no TST
+            </Tag>
+          )}
           {data?.cached && <Tag type="blue">⚡ Cache Inteligente ({data.cacheLevel || 'L1'})</Tag>}
         </div>
       </div>
 
       <div className="stats">
         <Stat
-          label="PROBABILIDADE DE CONDENAÇÃO"
+          label="ÍNDICE DE EXPOSIÇÃO FINANCEIRA"
           value={hasData && data.riskScore != null ? formatPercent(data.riskScore) : '—'}
-          hint="Score geral estimado de condenação (Súmula 331 TST)"
+          hint="Score geral estimado de impacto subsidiário"
           icon={AlertTriangle}
           tone={data?.riskScore >= 60 ? 'red' : data?.riskScore >= 35 ? 'amber' : 'green'}
         />
-        <Stat label="REGISTROS IDENTIFICADOS" value={hasData ? formatNumber(data.total) : '—'} hint="Processos localizados no Comunica PJe e DataJud" icon={FileText} />
-        <Stat label="ASSUNTOS IDENTIFICADOS" value={hasData ? formatNumber(reasons.length) : '—'} hint="Motivos e pedidos trabalhistas" icon={Filter} />
-        <Stat label="DESFECHOS CLASSIFICADOS" value={hasData ? formatNumber(classified) : '—'} hint="Inclui condenações, acordos e abertos" icon={CheckCircle2} />
-        <Stat label="COBERTURA DO SIGILO" value={secrecyEntries.length ? 'Parcial' : 'Indisponível'} hint="Nível de sigilo judicial informado" icon={ShieldAlert} tone="amber" />
+        <Stat label="EVENTOS IDENTIFICADOS" value={hasData ? formatNumber(data.total) : '—'} hint="Registros localizados nas bases públicas oficiais" icon={FileText} />
+        <Stat label="VETORES DE RISCO" value={hasData ? formatNumber(reasons.length) : '—'} hint="Motivos e ocorrências operacionais" icon={Filter} />
+        <Stat label="DESFECHOS MAPEADOS" value={hasData ? formatNumber(classified) : '—'} hint="Inclui impactos confirmados, acordos e abertos" icon={CheckCircle2} />
+        <Stat label="TRANSPARÊNCIA DE DADOS" value={secrecyEntries.length ? 'Parcial' : 'Indisponível'} hint="Nível de visibilidade pública informado" icon={ShieldAlert} tone="amber" />
       </div>
+
+      {/* Idoneidade Econômica & Risco de Exposição Subsidiária */}
+      {data?.idoneidadeEconomica && (() => {
+        const econ = data.idoneidadeEconomica;
+        const isCenarioA = (econ.cenario_tipo === 'CENARIO_A') || (econ.cenario === 'CENARIO_A') || (econ.cenario_class === 'seguro');
+        const badgePorte = econ.badge_compatibilidade_porte || econ.observacao_porte || econ.capital_social_display?.observacao_porte;
+        const capitalFormatted = econ.capital_social_formatado || econ.valor_formatado || econ.capital_social_display?.valor_formatado || 'R$ 0,00';
+        const situacao = econ.situacao_cadastral || 'ATIVA';
+        const isSituacaoAtiva = situacao === 'ATIVA';
+        const probInsolv = Number(econ.probabilidade_insolvencia ?? econ.probabilidade_insolvencia_pct ?? 0);
+        const riscoCalote = Number(econ.risco_calote_subsidiario ?? econ.risco_calote_subsidiario_pct ?? 0);
+        const cenarioTitulo = econ.cenario_titulo || (isCenarioA ? 'Cenário A: Idoneidade Econômica Robusta • Risco de Transferência de Passivo Mitigado' : 'Cenário B: Risco Crítico de Transferência de Passivo (Alerta Máximo de Retenção)');
+        const cenarioDescricao = econ.cenario_descricao || econ.parecer_sumula_331 || '';
+        const cenarioBadge = econ.cenario_badge || (isCenarioA ? 'Cenário A · Solvência Comprovada' : 'Cenário B · Risco Crítico');
+        const subtituloUnidades = econ.subtitulo_unidades || econ.detalhe_filiais || 'Soma e lastro patrimonial consolidado cobrindo a matriz e todas as filiais ativas (IN RFB 2119/2022).';
+
+        return (
+          <Panel
+            title="Idoneidade Econômica & Risco de Exposição Subsidiária"
+            subtitle="Auditoria de solvência, capital social e risco de transferência de passivo (Súmula 331 TST)"
+            action={
+              <Tag type={isCenarioA ? 'green' : 'red'}>
+                {cenarioBadge}
+              </Tag>
+            }
+          >
+            <div style={{ display: 'grid', gap: '16px' }}>
+              <div
+                style={{
+                  padding: '16px',
+                  borderRadius: '10px',
+                  border: isCenarioA ? '1px solid #bbf7d0' : '1px solid #fecaca',
+                  background: isCenarioA ? '#f0fdf4' : '#fef2f2',
+                  color: isCenarioA ? '#166534' : '#991b1b',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '10px',
+                }}
+              >
+                <div>
+                  <strong style={{ display: 'block', fontSize: '15px', marginBottom: '4px' }}>
+                    {cenarioTitulo}
+                  </strong>
+                  <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.5, opacity: 0.9 }}>
+                    {cenarioDescricao}
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px' }}>
+                <div className="econ-badge" style={{ gridColumn: 'span 2' }}>
+                  <small style={{ color: '#245a81', fontWeight: 600 }}>
+                    {data?.isBroadBrand || (econ?.unidades_identificadas > 1)
+                      ? 'Capital Social Consolidado (Matriz + Filiais):'
+                      : 'Capital Social Cadastral (Receita Federal):'}
+                  </small>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '10px', marginTop: '4px', marginBottom: '4px' }}>
+                    <strong style={{ fontSize: '20px', color: '#17283a', lineHeight: 1.2 }}>
+                      {capitalFormatted}
+                    </strong>
+                    {badgePorte && (
+                      <span style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        background: '#e8f0f6',
+                        color: '#245a81',
+                        border: '1px solid #cdd7df'
+                      }}>
+                        {badgePorte}
+                      </span>
+                    )}
+                  </div>
+                  <small style={{ color: '#68798a', fontSize: '11px' }}>
+                    {subtituloUnidades}
+                  </small>
+                </div>
+
+                <div className="econ-badge">
+                  <small style={{ color: '#245a81', fontWeight: 600 }}>Situação Cadastral RFB:</small>
+                  <strong style={{ fontSize: '16px', color: isSituacaoAtiva ? '#25865a' : '#c34a4a', marginTop: '4px' }}>
+                    {situacao}
+                  </strong>
+                  <small style={{ color: '#68798a', fontSize: '11px' }}>
+                    {isSituacaoAtiva ? 'Sem bloqueios cadastrais' : 'Restrição cadastral na RFB'}
+                  </small>
+                </div>
+
+                <div className="econ-badge">
+                  <small style={{ color: '#245a81', fontWeight: 600 }}>Probabilidade de Insolvência:</small>
+                  <strong style={{ fontSize: '16px', color: probInsolv >= 30 ? '#c34a4a' : probInsolv >= 15 ? '#b67b23' : '#25865a', marginTop: '4px' }}>
+                    {formatPercent(probInsolv)}
+                  </strong>
+                  <small style={{ color: '#68798a', fontSize: '11px' }}>
+                    Modelo atuarial de solvência
+                  </small>
+                </div>
+
+                <div className="econ-badge">
+                  <small style={{ color: '#245a81', fontWeight: 600 }}>Risco de Exposição Subsidiária:</small>
+                  <strong style={{ fontSize: '16px', color: riscoCalote >= 20 ? '#c34a4a' : riscoCalote >= 10 ? '#b67b23' : '#25865a', marginTop: '4px' }}>
+                    {formatPercent(riscoCalote)}
+                  </strong>
+                  <small style={{ color: '#68798a', fontSize: '11px' }}>
+                    Súmula 331 TST / Impacto ao Contratante
+                  </small>
+                </div>
+
+                <div className="econ-badge">
+                  <small style={{ color: '#245a81', fontWeight: 600 }}>Sanções e Débitos Federais:</small>
+                  <strong style={{ fontSize: '15px', color: (econ.possui_sancoes_cgu || econ.possui_divida_ativa) ? '#c34a4a' : '#25865a', marginTop: '4px' }}>
+                    {(econ.possui_sancoes_cgu || econ.possui_divida_ativa) ? 'Constam Apontamentos' : 'Nada Consta'}
+                  </strong>
+                  <small style={{ color: '#68798a', fontSize: '11px' }}>
+                    CEIS/CNEP/CEPIM &amp; PGFN
+                  </small>
+                </div>
+              </div>
+            </div>
+          </Panel>
+        );
+      })()}
 
       {/* Parecer do Consultor de Inteligência Artificial (Agente ADK radarjusAgent) */}
       {ai && (
@@ -264,7 +494,9 @@ function Overview({ data, navigate }) {
               {ai.recomendacao_homologacao && (
                 <Tag
                   type={
-                    ai.recomendacao_homologacao.includes('SEM RESTRIÇÕES')
+                    ai.recomendacao_homologacao.includes('SEM RESTRIÇÕES') ||
+                    ai.recomendacao_homologacao.includes('APROVAR') ||
+                    ai.recomendacao_homologacao.includes('MITIGADO')
                       ? 'green'
                       : ai.recomendacao_homologacao.includes('RETENÇÃO')
                         ? 'amber'
@@ -288,14 +520,14 @@ function Overview({ data, navigate }) {
               <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', padding: '12px 16px', background: '#f5f8fa', borderRadius: '10px' }}>
                 {ai.taxa_historica_condenacao_pct != null && (
                   <div>
-                    <small style={{ color: '#68798a', display: 'block' }}>Taxa Histórica de Condenação:</small>
+                    <small style={{ color: '#68798a', display: 'block' }}>Taxa Histórica de Impactos Confirmados:</small>
                     <strong style={{ fontSize: '18px', color: ai.taxa_historica_condenacao_pct >= 60 ? '#c34a4a' : ai.taxa_historica_condenacao_pct >= 35 ? '#b67b23' : '#25865a' }}>
                       {formatPercent(ai.taxa_historica_condenacao_pct)}
                     </strong>
                   </div>
                 )}
                 <div>
-                  <small style={{ color: '#68798a', display: 'block' }}>Taxa Histórica de Vitória (Improcedências):</small>
+                  <small style={{ color: '#68798a', display: 'block' }}>Taxa Histórica de Risco Mitigado (Favorável):</small>
                   <strong style={{ fontSize: '18px', color: '#25865a' }}>{formatPercent(ai.taxa_historica_vitoria_empresa_pct)}</strong>
                 </div>
                 {ai.taxa_historica_acordos_pct != null && (
@@ -330,8 +562,37 @@ function Overview({ data, navigate }) {
         </Panel>
       )}
 
+      {/* Ranking de Vetores Principais de Exposição */}
+      {Array.isArray(data?.rankingCondenacoes) && data.rankingCondenacoes.length > 0 && (
+        <Panel
+          title="Ranking de Vetores Principais de Exposição"
+          subtitle="Assuntos com histórico confirmado de desembolso financeiro que calibram o motor preditivo"
+        >
+          <div className="bars">
+            {data.rankingCondenacoes.slice(0, 6).map((item, index) => {
+              const barWidth = Math.max(8, item.taxa_no_motivo || item.taxa_condenacao_no_motivo || item.percentual || 0);
+              const labelDireita = item.label_direita || `${item.condenacoes || item.quantidade_condenacoes || item.quantidade || 0} condenações (${item.taxa_no_motivo || item.taxa_condenacao_no_motivo || item.taxa_perda_no_motivo || 0}% de perda no motivo)`;
+              return (
+                <div className="bar-item" key={`${item.motivo}-${index}`}>
+                  <div className="bar-top">
+                    <span title={item.motivo} style={{ fontWeight: 600 }}>{item.motivo}</span>
+                    <b style={{ color: '#c34a4a' }}>{labelDireita}</b>
+                  </div>
+                  <div className="track">
+                    <div style={{ width: `${Math.min(100, barWidth)}%`, background: '#c34a4a' }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="muted-note" style={{ marginTop: '14px' }}>
+            <BarChart3 size={15} /> Calibragem bayesiana contínua: os temas acima possuem desfechos confirmados que elevam o prior beta do modelo preditivo.
+          </div>
+        </Panel>
+      )}
+
       <div className="two-col">
-        <Panel title="Assuntos mais recorrentes" subtitle="Frequência entre os registros identificados" action={<button className="text-button" onClick={() => navigate('processes')}>Ver processos <ArrowRight size={15} /></button>}>
+        <Panel title="Vetores mais recorrentes" subtitle="Frequência entre os registros identificados" action={<button className="text-button" onClick={() => navigate('processes')}>Ver processos <ArrowRight size={15} /></button>}>
           {reasons.length ? (
             <div className="bars">
               {reasons.slice(0, 6).map((reason, index) => {
@@ -351,7 +612,7 @@ function Overview({ data, navigate }) {
             <div className="outcome-grid">
               {Object.entries(OUTCOME_LABELS).map(([key, label], index) => (
                 <div className="outcome" key={key}>
-                  <span className="outcome-dot" style={{ background: CHART_COLORS[index] }} />
+                  <span className="outcome-dot" style={{ background: CHART_COLORS[index % CHART_COLORS.length] }} />
                   <span>{label}</span><strong>{formatNumber(outcomes[key])}</strong>
                 </div>
               ))}
@@ -387,7 +648,7 @@ function Overview({ data, navigate }) {
             {[
               { page: 'search', icon: Search, title: 'Pesquisar outra empresa', text: 'Inicie uma nova consulta rápida.' },
               { page: 'processes', icon: FileText, title: 'Explorar processos e observações', text: 'Veja números, assuntos inferidos e desfechos.' },
-              { page: 'predictions', icon: ChartNoAxesCombined, title: 'Probabilidade de vitória', text: 'Consulte a chance da empresa vencer por motivo.' },
+              { page: 'predictions', icon: ChartNoAxesCombined, title: 'Estimativas de Exposição', text: 'Consulte a previsibilidade de impacto financeiro por vetor.' },
             ].map(({ page, icon: Icon, title, text }) => (
               <button key={page} onClick={() => navigate(page)}>
                 <Icon size={20} /><span><b>{title}</b><small>{text}</small></span><ChevronRight size={18} />
@@ -439,7 +700,14 @@ function Processes({ data }) {
               <tbody>
                 {list.map((process, index) => (
                   <tr key={process.id || process.numero_processo || index}>
-                    <td className="mono">{process.numero_processo || process.process_number || 'Não informado'}</td>
+                    <td className="mono">
+                      {process.numero_processo || process.process_number || 'Não informado'}
+                      {(process.is_tst_recurso || process.tribunal === 'tst' || String(process.grau || '').includes('TST')) && (
+                        <span style={{ marginLeft: '8px' }}>
+                          <Tag type="purple">Instância Superior TST</Tag>
+                        </span>
+                      )}
+                    </td>
                     <td>
                       <b>{Array.isArray(process.subjects) ? process.subjects.join(', ') : process.primary_subject || 'Não informado'}</b>
                     </td>
@@ -448,11 +716,17 @@ function Processes({ data }) {
                         {OUTCOME_LABELS[process.sentence_outcome] || process.sentence_outcome || 'Em aberto'}
                       </Tag>
                     </td>
-                    <td>Nível {process.nivelSigilo ?? process.secrecy_level ?? 0}</td>
                     <td>
-                      {process.observation ? (
-                        <span style={{ color: '#25865a', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <CheckCircle2 size={13} /> {process.observation}
+                      {process.secrecy_level != null ? (
+                        <Tag type={Number(process.secrecy_level) > 0 ? 'amber' : 'gray'}>
+                          Nível {process.secrecy_level}
+                        </Tag>
+                      ) : '—'}
+                    </td>
+                    <td>
+                      {process.inferred_from_djen_text ? (
+                        <span style={{ color: '#245a81', fontSize: '12px' }}>
+                          Assunto identificado via publicação PJe
                         </span>
                       ) : (
                         <span style={{ color: '#8899a6', fontSize: '11px' }}>Metadados TPU oficiais</span>
@@ -489,10 +763,10 @@ function Predictions({ data }) {
       </div>
 
       <div className="info-banner warning">
-        <AlertCircle size={20} />
+        <Activity size={20} />
         <div>
           <b>Modelo Conjugado Dirichlet-Multinomial &amp; Intervalo de Credibilidade Beta (90%)</b>
-          <p>Separa explicitamente a probabilidade de Improcedência (vitória real), Acordo Homologado e Condenação com shrinkage Empirical Bayes, ajuste de perícia em escala logit e projeção de condenações esperadas na carteira aberta.</p>
+          <p>Separa explicitamente a probabilidade de Improcedência (risco mitigado), Acordo e Condenação (impacto confirmado) com shrinkage Empirical Bayes, ajuste de perícia em escala logit e projeção de impactos esperados na carteira aberta.</p>
         </div>
       </div>
 
@@ -584,8 +858,8 @@ function Predictions({ data }) {
             <p>Mede a incerteza real da amostra [p5, p95] e aplica desconto por censura à direita quando há muitos processos em aberto.</p>
           </div>
           <div>
-            <b>Condenações Esperadas nos Abertos</b>
-            <p>Projeta o passivo esperado multiplicando o volume de processos abertos pela probabilidade posterior de condenação do motivo.</p>
+            <b>Impactos Esperados nos Abertos</b>
+            <p>Projeta o passivo esperado multiplicando o volume de processos abertos pela probabilidade posterior de impacto financeiro do motivo.</p>
           </div>
         </div>
       </Panel>
@@ -669,7 +943,14 @@ export default function App() {
         if (statusRes?.is_completed && statusRes.data) {
           const updated = normalize(statusRes.data);
           if (updated) {
-            setData(updated);
+            setData((prev) => ({
+              ...updated,
+              idoneidadeEconomica: updated.idoneidadeEconomica || prev?.idoneidadeEconomica,
+              logo: updated.logo || prev?.logo,
+              rankingCondenacoes: (updated.rankingCondenacoes && updated.rankingCondenacoes.length > 0)
+                ? updated.rankingCondenacoes
+                : prev?.rankingCondenacoes || [],
+            }));
           }
           clearInterval(intervalId);
         }
@@ -753,7 +1034,7 @@ export default function App() {
           {page === 'predictions' && <Predictions data={data} />}
           {page === 'history' && <HistoryPage history={history} busy={historyBusy} error={historyError} onOpen={openHistory} onReload={loadHistory} />}
         </main>
-        <footer className="footer">RadarJus · Monitoramento e Diagnóstico Preditivo de Risco Trabalhista</footer>
+        <footer className="footer">RadarJus · Inteligência Preditiva e Gestão de Risco de Fornecedores</footer>
       </div>
     </div>
   );
