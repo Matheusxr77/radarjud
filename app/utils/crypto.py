@@ -3,6 +3,11 @@ import json
 from typing import List, Dict, Any
 
 
+def _sort_by_process_number(entry: Dict[str, Any]) -> str:
+    """Extrai o número do processo para ordenação canônica determinística do hash."""
+    return str(entry.get("processo", ""))
+
+
 def generate_movements_hash(processes_data: List[Dict[str, Any]]) -> str:
     """
     Gera um hash SHA-256 representativo do estado atual das movimentações e metadados
@@ -47,7 +52,7 @@ def generate_movements_hash(processes_data: List[Dict[str, Any]]) -> str:
         })
 
     # Ordena pelo número do processo para garantir determinismo
-    normalized_entries.sort(key=lambda x: x["processo"])
+    normalized_entries.sort(key=_sort_by_process_number)
 
     serialized = json.dumps(normalized_entries, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
