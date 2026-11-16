@@ -26,7 +26,7 @@ def create_app(config_name: str = None) -> Flask:
 
     # Inicialização de Extensões
     db.init_app(app)
-    cors.init_app(app, resources={r"/api/*": {"origins": "*"}})
+    cors.init_app(app, resources={r"/api/.*": {"origins": "*"}, r"/api/*": {"origins": "*"}})
 
     # Registro de Blueprints
     app.register_blueprint(api_bp)

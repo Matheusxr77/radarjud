@@ -152,13 +152,17 @@ function normalize(raw) {
 
 async function request(path, options = {}) {
   let response;
+  const endpoint = `${API_BASE}/api/v1${path}`;
   try {
-    response = await fetch(`${API_BASE}/api/v1${path}`, {
+    response = await fetch(endpoint, {
       ...options,
       headers: { 'Content-Type': 'application/json', ...options.headers },
     });
   } catch {
-    throw new Error('Não foi possível conectar à API. Verifique se o Flask está em execução.');
+    if (!API_BASE && typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      throw new Error('A variável de ambiente VITE_API_BASE_URL não está configurada na Vercel apontando para o Render.');
+    }
+    throw new Error('Não foi possível conectar à API. Se o serviço no Render for gratuito, aguarde cerca de 1 minuto para inicialização (cold start).');
   }
   const body = await response.json().catch(() => null);
   if (!response.ok) {
