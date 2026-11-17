@@ -216,6 +216,17 @@ class CNJProcessSearcher:
         key = os.getenv("DATAJUD_API_KEY") or self.DEFAULT_DATAJUD_KEY
         self.datajud_key = key.strip() if key else self.DEFAULT_DATAJUD_KEY
         self.session = session or requests.Session()
+        
+        # Suporte a proxy dedicado isolado (não interfere no pip/build do Render)
+        proxy_url = os.getenv("PJE_PROXY_URL") or os.getenv("JUDICIAL_PROXY_URL")
+        if proxy_url and proxy_url.strip():
+            proxy_clean = proxy_url.strip()
+            self.session.proxies = {
+                "http": proxy_clean,
+                "https": proxy_clean,
+            }
+            logger.info("CNJProcessSearcher configurado com proxy dedicado PJE_PROXY_URL.")
+
         self.session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
