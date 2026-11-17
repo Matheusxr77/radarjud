@@ -3,6 +3,9 @@ import {
   Search, LayoutDashboard, FileText, ChartNoAxesCombined, History,
   Menu, X, ArrowRight, RefreshCw, AlertCircle, AlertTriangle, ShieldCheck, ShieldAlert,
   Info, ChevronRight, Building2, TrendingUp, Filter, CheckCircle2,
+  Check, Activity, BarChart3, Radar, Share2, Download,
+} from 'lucide-react';
+import { companyHash, companyShareUrl, isCompanyPage, parseRoute, validSearchId } from './companyNavigation.js';
   Check, Activity, BarChart3, Radar, Library,
 } from 'lucide-react';
 import { CompanyLogo } from "./CompanyLogo.jsx";
@@ -883,13 +886,73 @@ function HistoryPage({ onOpen, history, busy, error, onReload }) {
   );
 }
 
-function getPageFromHash() {
-  const page = window.location.hash.replace(/^#\/?/, '').split('/')[0];
-  return Object.hasOwn(PAGE_LABELS, page) ? page : 'search';
+function CompanyShareActions({ data }) {
+  const [message, setMessage] = useState('');
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [manualUrl, setManualUrl] = useState('');
+  const id = validSearchId(data.searchId);
+
+  async function copyLink() {
+    const url = companyShareUrl(window.location, id);
+    setManualUrl('');
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard indisponível');
+      await navigator.clipboard.writeText(url);
+      setMessage('Link copiado.');
+    } catch {
+      setManualUrl(url);
+      setMessage('Selecione e copie o link abaixo.');
+    }
+  }
+
+  async function downloadPdf() {
+    setPdfBusy(true);
+    setMessage('');
+    let objectUrl;
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/history/${id}/summary.pdf`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error || `Não foi possível baixar o PDF (HTTP ${response.status}).`);
+      }
+      if (!response.headers.get('content-type')?.includes('application/pdf')) {
+        throw new Error('A API não retornou um PDF válido.');
+      }
+      objectUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = `radarjus-empresa-${id}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setMessage('Download do PDF iniciado.');
+    } catch (failure) {
+      setMessage(failure.message || 'Não foi possível baixar o PDF.');
+    } finally {
+      if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      setPdfBusy(false);
+    }
+  }
+
+  return (
+    <section className="company-share card" aria-label="Compartilhar consulta">
+      <div className="company-share-row">
+        <div><b>Compartilhar consulta</b><small>{id ? 'Compartilhe a análise salva ou baixe o resumo em PDF.' : 'A consulta ainda não foi salva no banco de dados.'}</small></div>
+        <div className="company-share-buttons">
+          <button type="button" className="secondary" onClick={copyLink} disabled={!id}><Share2 size={16} /> Compartilhar link</button>
+          <button type="button" className="secondary" onClick={downloadPdf} disabled={!id || pdfBusy}><Download size={16} /> {pdfBusy ? 'Gerando PDF...' : 'Baixar PDF'}</button>
+        </div>
+      </div>
+      {message && <p className="company-share-message" role="status">{message}</p>}
+      {manualUrl && <input className="company-share-url" aria-label="Link da consulta" value={manualUrl} readOnly onFocus={(e) => e.target.select()} />}
+      {id && data.scanStatus !== 'COMPLETED' && <small>Varredura ainda não concluída: o resumo pode mudar após a atualização da consulta.</small>}
+    </section>
+  );
 }
 
 export default function App() {
-  const [page, setPage] = useState(getPageFromHash);
+  const [route, setRoute] = useState(() => parseRoute(window.location.hash));
+  const { page, searchId } = route;
   const [mobileOpen, setMobileOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [data, setData] = useState(null);
@@ -898,31 +961,57 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState('');
+  const [sharedError, setSharedError] = useState(null);
+  const [reloadShared, setReloadShared] = useState(0);
+  const needsSharedData = Boolean(searchId && validSearchId(data?.searchId) !== searchId);
+  const visibleData = needsSharedData ? null : data;
   const [catalog, setCatalog] = useState({ term: '', items: [], busy: false, error: '', unavailable: false, suggestion: '' });
   const [analyzing, setAnalyzing] = useState('');
 
-  function navigate(destination) {
+  function navigate(destination, id = searchId ?? data?.searchId) {
     if (!Object.hasOwn(PAGE_LABELS, destination)) return;
-    setPage(destination);
-    window.location.hash = `/${destination}`;
+    const hash = companyHash(destination, id);
+    setRoute(parseRoute(hash));
+    window.location.hash = hash;
   }
 
   useEffect(() => {
-    const syncHash = () => setPage(getPageFromHash());
+    const syncHash = () => setRoute(parseRoute(window.location.hash));
     window.addEventListener('hashchange', syncHash);
     return () => window.removeEventListener('hashchange', syncHash);
   }, []);
 
+  useEffect(() => {
+    if (!needsSharedData) return;
+    const controller = new AbortController();
+    setSharedError(null);
+    request(`/history/${searchId}`, { signal: controller.signal })
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        const normalized = normalize(result);
+        if (!normalized || validSearchId(normalized.searchId) !== searchId) {
+          throw new Error('A consulta salva não contém dados válidos.');
+        }
+        setData(normalized);
+        setQuery(normalized.name);
+      })
+      .catch((failure) => {
+        if (!controller.signal.aborted) setSharedError({ id: searchId, message: failure.message });
+      });
+    return () => controller.abort();
+  }, [searchId, needsSharedData, reloadShared]);
+
   // Polling automático para atualizar tela quando o Deep Scan em segundo plano finalizar
   useEffect(() => {
-    if (!data?.searchId || data?.scanStatus !== 'PARTIAL_FAST_PATH') return;
+    if (!data?.searchId || !['PARTIAL_FAST_PATH', 'SCANNING_BACKGROUND'].includes(data?.scanStatus)) return;
+    let active = true;
     const intervalId = setInterval(async () => {
       try {
         const statusRes = await request(`/search_status/${data.searchId}`);
-        if (statusRes?.is_completed && statusRes.data) {
+        if (active && statusRes?.is_completed && statusRes.data) {
           const updated = normalize(statusRes.data);
           if (updated) {
-            setData((prev) => ({
+            setData((prev) => validSearchId(prev?.searchId) !== validSearchId(data.searchId) ? prev : ({
               ...updated,
               idoneidadeEconomica: updated.idoneidadeEconomica || prev?.idoneidadeEconomica,
               logo: updated.logo || prev?.logo,
@@ -938,7 +1027,7 @@ export default function App() {
       }
     }, 3000);
 
-    return () => clearInterval(intervalId);
+    return () => { active = false; clearInterval(intervalId); };
   }, [data?.searchId, data?.scanStatus]);
 
   async function search(term = query) {
@@ -954,7 +1043,7 @@ export default function App() {
       const normalized = normalize(result);
       if (!normalized) throw new Error('A API não retornou dados de empresa válidos.');
       setData(normalized);
-      navigate('overview');
+      navigate('overview', normalized.searchId);
     } catch (failure) {
       setError(failure.message || 'Não foi possível pesquisar a empresa.');
     } finally {
@@ -1029,7 +1118,7 @@ export default function App() {
       if (!normalized) throw new Error('A consulta salva não contém dados válidos.');
       setData(normalized);
       setQuery(normalized.name);
-      navigate('overview');
+      navigate('overview', normalized.searchId);
     } catch (failure) {
       setHistoryError(failure.message || 'Não foi possível abrir a pesquisa.');
     } finally {
@@ -1053,6 +1142,21 @@ export default function App() {
           <div className="region"><span className="region-dot" /> CNJ DataJud · Comunica PJe</div>
         </header>
         <main className="content">
+          {page === 'search' && <SearchPage onSearch={search} query={query} setQuery={setQuery} busy={busy} error={error} navigate={navigate} result={data} />}
+          {isCompanyPage(page) && needsSharedData && (
+            sharedError?.id === searchId ? (
+              <div className="alert error" role="alert">
+                <AlertCircle size={18} /> {sharedError.message}
+                <button className="secondary" onClick={() => { setSharedError(null); setReloadShared((n) => n + 1); }}>Tentar novamente</button>
+              </div>
+            ) : <div className="loading" role="status"><RefreshCw className="spin" /> Carregando consulta compartilhada...</div>
+          )}
+          {isCompanyPage(page) && !needsSharedData && <>
+            {visibleData && <CompanyShareActions key={visibleData.searchId ?? visibleData.name} data={visibleData} />}
+            {page === 'overview' && <Overview data={visibleData} navigate={navigate} />}
+            {page === 'processes' && <Processes data={visibleData} />}
+            {page === 'predictions' && <Predictions data={visibleData} />}
+          </>}
           {page === 'search' && <SearchPage onSearch={submitSearch} query={query} setQuery={setQuery} busy={busy} error={error} navigate={navigate} result={data} />}
           {page === 'catalog' && (
             <CatalogPage
