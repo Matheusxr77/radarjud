@@ -6,15 +6,19 @@ import {
   Check, Activity, BarChart3, Radar, Share2, Download,
 } from 'lucide-react';
 import { companyHash, companyShareUrl, isCompanyPage, parseRoute, validSearchId } from './companyNavigation.js';
+  Check, Activity, BarChart3, Radar, Library,
+} from 'lucide-react';
+import { CompanyLogo } from "./CompanyLogo.jsx";
+import CatalogPage, { normalizeCatalog, onlyDigits } from './CatalogPage.jsx';
 
 // Vite encaminha /api ao Flask. Defina VITE_API_BASE_URL se a API estiver em outro host.
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 const PAGE_LABELS = {
-  search: 'Pesquisar empresas', overview: 'Visão geral', processes: 'Processos',
+  search: 'Pesquisar empresas', catalog: 'Catálogo de empresas', overview: 'Visão geral', processes: 'Processos',
   predictions: 'Estimativas', history: 'Histórico',
 };
 const NAV_ITEMS = [
-  { id: 'search', icon: Search }, { id: 'overview', icon: LayoutDashboard },
+  { id: 'search', icon: Search }, { id: 'catalog', icon: Library }, { id: 'overview', icon: LayoutDashboard },
   { id: 'processes', icon: FileText }, { id: 'predictions', icon: ChartNoAxesCombined },
   { id: 'history', icon: History },
 ];
@@ -33,41 +37,6 @@ const formatDate = (value) => {
   return Number.isNaN(parsed.getTime()) ? 'Não disponível' : parsed.toLocaleDateString('pt-BR');
 };
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-
-function CompanyLogo({ logo, companyName }) {
-  const [imgErrorStep, setImgErrorStep] = useState(0);
-  const logoUrl = imgErrorStep === 0
-    ? (logo?.logo_url || logo?.google_favicon_url || logo?.logo_primary_url)
-    : (imgErrorStep === 1 ? (logo?.logo_secondary_url || logo?.google_favicon_url) : null);
-
-  useEffect(() => {
-    setImgErrorStep(0);
-  }, [companyName, logo?.logo_url, logo?.google_favicon_url, logo?.logo_primary_url]);
-
-  if (logoUrl) {
-    return (
-      <img
-        key={logoUrl || companyName}
-        src={logoUrl}
-        alt={companyName || 'Logo'}
-        className="company-logo-img"
-        onLoad={(e) => {
-          // Intercepta globo cinza genérico de 16x16px da Google S2 API
-          if (e.currentTarget.naturalWidth <= 16 && (e.currentTarget.src.includes('sz=128') || e.currentTarget.src.includes('favicons'))) {
-            setImgErrorStep((prev) => prev + 1);
-          }
-        }}
-        onError={() => setImgErrorStep((prev) => prev + 1)}
-      />
-    );
-  }
-  const initials = logo?.fallback_initials || logo?.initials || (companyName ? companyName.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() : 'EMP');
-  return (
-    <div className="company-logo-fallback" title={companyName}>
-      {initials}
-    </div>
-  );
-}
 
 function normalize(raw) {
   if (!isRecord(raw)) return null;
@@ -167,7 +136,10 @@ async function request(path, options = {}) {
   }
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(body?.error || body?.message || `Erro HTTP ${response.status}`);
+    const failure = new Error(body?.error || body?.message || `Erro HTTP ${response.status}`);
+    failure.status = response.status;
+    failure.hasBody = body !== null;
+    throw failure;
   }
   if (body === null) throw new Error('A API não retornou JSON válido.');
   return body;
@@ -209,7 +181,7 @@ function Tag({ children, type = 'blue' }) {
   return <span className={`tag ${type}`}>{children}</span>;
 }
 
-function Sidebar({ page, navigate, mobileOpen, setMobileOpen }) {
+function Sidebar({page,navigate,mobileOpen,setMobileOpen,showCatalog}) {
   return (
     <>
       <div className={`mobile-overlay ${mobileOpen ? 'visible' : ''}`} onClick={() => setMobileOpen(false)} />
@@ -221,7 +193,9 @@ function Sidebar({ page, navigate, mobileOpen, setMobileOpen }) {
         </div>
         <div className="nav-label">PLATAFORMA</div>
         <nav aria-label="Navegação principal">
-          {NAV_ITEMS.map(({ id, icon: Icon }) => (
+         {NAV_ITEMS
+        .filter(({ id }) => id !== 'catalog' || showCatalog)
+        .map(({ id, icon: Icon }) => (
             <button
               key={id}
               type="button"
@@ -269,14 +243,14 @@ function SearchPage({ onSearch, query, setQuery, busy, error, navigate, result }
             placeholder="Digite o nome da empresa ou CNPJ"
             aria-label="Nome da empresa ou CNPJ"
             required
-            minLength={2}
+            minLength={3}
           />
           <button className="primary" disabled={busy}>
             {busy ? <><RefreshCw size={17} className="spin" /> Consultando</> : <>Pesquisar <ArrowRight size={17} /></>}
           </button>
         </form>
         <div className="search-hint">
-          <Info size={15} /> A busca suporta Razão Social, Nome Fantasia ou CNPJ (com triangulação via BrasilAPI).
+          <Info size={15} /> Digite um nome para escolher a empresa no catálogo, ou um CNPJ completo para analisar direto.
         </div>
         {error && <div className="alert error" role="alert"><AlertCircle size={18} />{error}</div>}
       </div>
@@ -298,7 +272,7 @@ function SearchPage({ onSearch, query, setQuery, busy, error, navigate, result }
   );
 }
 
-function Overview({ data, navigate }) {
+function Overview({ data, navigate, catalogTerm }) {
   const secrecyEntries = data?.secrecy ? Object.entries(data.secrecy) : [];
   const observed = secrecyEntries.reduce((sum, [, count]) => sum + Number(count || 0), 0);
   const knownSecret = secrecyEntries.reduce((sum, [level, count]) => sum + (Number(level) > 0 ? Number(count || 0) : 0), 0);
@@ -651,6 +625,7 @@ function Overview({ data, navigate }) {
         <Panel title="Aprofundamento de análise" subtitle="Próximas ações de compliance">
           <div className="next-steps">
             {[
+              ...(catalogTerm ? [{ page: 'catalog', icon: Library, title: 'Voltar ao catálogo', text: `Escolha outra empresa da busca “${catalogTerm}”.` }] : []),
               { page: 'search', icon: Search, title: 'Pesquisar outra empresa', text: 'Inicie uma nova consulta rápida.' },
               { page: 'processes', icon: FileText, title: 'Explorar processos e observações', text: 'Veja números, assuntos inferidos e desfechos.' },
               { page: 'predictions', icon: ChartNoAxesCombined, title: 'Estimativas de Exposição', text: 'Consulte a previsibilidade de impacto financeiro por vetor.' },
@@ -990,6 +965,8 @@ export default function App() {
   const [reloadShared, setReloadShared] = useState(0);
   const needsSharedData = Boolean(searchId && validSearchId(data?.searchId) !== searchId);
   const visibleData = needsSharedData ? null : data;
+  const [catalog, setCatalog] = useState({ term: '', items: [], busy: false, error: '', unavailable: false, suggestion: '' });
+  const [analyzing, setAnalyzing] = useState('');
 
   function navigate(destination, id = searchId ?? data?.searchId) {
     if (!Object.hasOwn(PAGE_LABELS, destination)) return;
@@ -1053,14 +1030,15 @@ export default function App() {
     return () => { active = false; clearInterval(intervalId); };
   }, [data?.searchId, data?.scanStatus]);
 
-  async function search() {
-    if (query.trim().length < 2) return;
+  async function search(term = query) {
+    const text = String(term || '').trim();
+    if (text.length < 2) return;
     setBusy(true);
     setError('');
     try {
       const result = await request('/search-company', {
         method: 'POST',
-        body: JSON.stringify({ company_name: query.trim() }),
+        body: JSON.stringify({ company_name: text }),
       });
       const normalized = normalize(result);
       if (!normalized) throw new Error('A API não retornou dados de empresa válidos.');
@@ -1071,6 +1049,51 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // Nome → catálogo para o usuário escolher. CNPJ completo → análise direta.
+  function submitSearch(override) {
+    const text = (typeof override === 'string' ? override : query).trim();
+    if (text.length < 3) return;
+    if (onlyDigits(text).length === 14) {
+      search(onlyDigits(text));
+      return;
+    }
+    navigate('catalog');
+    loadCatalog(text);
+  }
+
+  async function loadCatalog(term) {
+    setError('');
+    setCatalog({ term, items: [], busy: true, error: '', unavailable: false, suggestion: '' });
+    try {
+      const result = await request(`/company-catalog?q=${encodeURIComponent(term)}&limit=100`);
+      const { items, suggestion } = normalizeCatalog(result);
+      setCatalog({ term, items, busy: false, error: '', unavailable: false, suggestion });
+    } catch (failure) {
+      // 404/405/501 sem corpo JSON = rota inexistente no backend. 404 com JSON = busca sem resultados.
+      const routeMissing = [404, 405, 501].includes(failure.status) && !failure.hasBody;
+      const notFound = failure.status === 404 && failure.hasBody;
+      setCatalog({
+        term, items: [], busy: false, unavailable: routeMissing, suggestion: '',
+        error: routeMissing || notFound ? '' : (failure.message || 'Não foi possível consultar o catálogo.'),
+      });
+    }
+  }
+
+  // Seleção no catálogo: o CNPJ escolhido isola exatamente aquela empresa (modo STRICT_CNPJ).
+  async function analyzeCatalogItem(item) {
+    setAnalyzing(item.cnpj);
+    // Envia o CNPJ (não a razão social): é ele que isola a empresa escolhida no backend.
+    await search(item.cnpj);
+    setAnalyzing('');
+  }
+
+  // Marca inteira (modo BROAD_BRAND): consolida todas as empresas e filiais do nome pesquisado.
+  async function analyzeGroup() {
+    setAnalyzing('GROUP');
+    await search(catalog.term);
+    setAnalyzing('');
   }
 
   async function loadHistory() {
@@ -1109,7 +1132,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar page={page} navigate={navigate} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+      <Sidebar page={page}navigate={navigate}mobileOpen={mobileOpen}setMobileOpen={setMobileOpen}showCatalog={Boolean(catalog.term)}/>
       <div className="main">
         <header className="topbar">
           <div className="topbar-left">
@@ -1134,6 +1157,17 @@ export default function App() {
             {page === 'processes' && <Processes data={visibleData} />}
             {page === 'predictions' && <Predictions data={visibleData} />}
           </>}
+          {page === 'search' && <SearchPage onSearch={submitSearch} query={query} setQuery={setQuery} busy={busy} error={error} navigate={navigate} result={data} />}
+          {page === 'catalog' && (
+            <CatalogPage
+              query={query} setQuery={setQuery} catalog={catalog} onSubmit={submitSearch}
+              onAnalyze={analyzeCatalogItem} onAnalyzeGroup={analyzeGroup}
+              analyzing={analyzing} analysisBusy={busy} analysisError={error}
+            />
+          )}
+          {page === 'overview' && <Overview data={data} navigate={navigate} catalogTerm={catalog.term} />}
+          {page === 'processes' && <Processes data={data} />}
+          {page === 'predictions' && <Predictions data={data} />}
           {page === 'history' && <HistoryPage history={history} busy={historyBusy} error={historyError} onOpen={openHistory} onReload={loadHistory} />}
         </main>
         <footer className="footer">RadarJus · Inteligência Preditiva e Gestão de Risco de Fornecedores</footer>
