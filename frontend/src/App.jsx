@@ -3,11 +3,9 @@ import {
   Search, LayoutDashboard, FileText, ChartNoAxesCombined, History,
   Menu, X, ArrowRight, RefreshCw, AlertCircle, AlertTriangle, ShieldCheck, ShieldAlert,
   Info, ChevronRight, Building2, TrendingUp, Filter, CheckCircle2,
-  Check, Activity, BarChart3, Radar, Share2, Download,
+  Check, Activity, BarChart3, Radar, Share2, Download, Library
 } from 'lucide-react';
 import { companyHash, companyShareUrl, isCompanyPage, parseRoute, validSearchId } from './companyNavigation.js';
-  Check, Activity, BarChart3, Radar, Library,
-} from 'lucide-react';
 import { CompanyLogo } from "./CompanyLogo.jsx";
 import CatalogPage, { normalizeCatalog, onlyDigits } from './CatalogPage.jsx';
 
