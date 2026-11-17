@@ -697,6 +697,280 @@ def search_company():
         return jsonify({"error": "Erro interno ao consultar APIs do CNJ."}), 500
 
 
+# =============================================================================
+# CATÁLOGO DE EMPRESAS  ->  GET /api/v1/company-catalog?q=sauter&limit=100[&debug=1]
+#   (alias: /api/v1/companies/search)
+#
+# COLE ESTE BLOCO no mesmo arquivo do `api_bp` (o que contém search_company),
+# logo ANTES de:   @api_bp.route("/search_status/<int:search_id>", ...)
+#
+# Não precisa de blueprint novo nem de register_blueprint: a rota nasce em api_bp.
+# Reaproveita o que o arquivo já importa: orchestrator, discover_company_cnpjs,
+# resolve_company_logo, fetch_cnpj_brasilapi, resolve_search_strategy,
+# is_valid_company_search_input, is_cnpj, CNPJ_REGEX, ThreadPoolExecutor, current_app.
+# =============================================================================
+import inspect
+import unicodedata
+
+import requests
+
+CATALOG_CACHE = {}          # {(termo_normalizado,): (timestamp, payload)}
+CATALOG_TTL = 3600          # 1h
+CATALOG_PAGES = 3           # páginas do Comunica PJe varridas na descoberta (50 itens/página)
+CATALOG_MAX_ROOTS = 30      # teto de empresas (raízes de CNPJ) por busca
+CATALOG_BRANCHES_PER_ROOT = 3   # filiais (vistas nos processos) listadas por empresa
+CATALOG_MAX_BRANCH_JOBS = 20    # teto global de consultas extras de filiais à BrasilAPI
+_FREE_MAIL = {
+    "gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "yahoo.com.br", "uol.com.br",
+    "bol.com.br", "terra.com.br", "ig.com.br", "icloud.com", "live.com", "msn.com",
+}
+
+
+def _cat_norm(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text or "")
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return re.sub(r"[^A-Z0-9 ]", " ", text.upper()).strip()
+
+
+def _cat_dv(base12: str) -> str:
+    w1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    w2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    r1 = sum(int(d) * w for d, w in zip(base12, w1)) % 11
+    d1 = "0" if r1 < 2 else str(11 - r1)
+    r2 = sum(int(d) * w for d, w in zip(base12 + d1, w2)) % 11
+    d2 = "0" if r2 < 2 else str(11 - r2)
+    return d1 + d2
+
+
+def _cat_valid(cnpj: str) -> bool:
+    return len(cnpj) == 14 and len(set(cnpj)) > 1 and cnpj[12:] == _cat_dv(cnpj[:12])
+
+
+def _cat_matrix(root8: str) -> str:
+    base = root8 + "0001"
+    return base + _cat_dv(base)
+
+
+def _cat_brasilapi(cnpj: str):
+    """Usa o fetcher do projeto; se ele devolver outro formato, cai na BrasilAPI direta."""
+    try:
+        data = fetch_cnpj_brasilapi(cnpj)
+        if isinstance(data, dict) and data.get("razao_social") and "descricao_situacao_cadastral" in data:
+            return data
+    except Exception as exc:
+        logger.debug("Catálogo: fetch_cnpj_brasilapi falhou (%s): %s", cnpj, exc)
+    try:
+        r = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}", timeout=12)
+        return r.json() if r.ok else None
+    except Exception as exc:
+        logger.debug("Catálogo: BrasilAPI direta falhou (%s): %s", cnpj, exc)
+        return None
+
+
+def _cat_logo(data: dict, cnpj: str):
+    """Chama resolve_company_logo do projeto adaptando-se à assinatura real (inspect).
+    Retorna (logo_dict, origem) — origem aparece no ?debug=1."""
+    razao = data.get("razao_social") or ""
+    fantasia = data.get("nome_fantasia") or ""
+    email = (data.get("email") or "").lower()
+    values = {
+        "company_name": razao, "razao_social": razao, "name": razao, "nome": razao,
+        "nome_fantasia": fantasia, "cnpj": cnpj, "email": email,
+        "brasil_data": data, "brasilapi_data": data, "cnpj_data": data, "data": data,
+        "dados_cnpj": data, "company_data": data,
+    }
+    try:
+        sig = inspect.signature(resolve_company_logo)
+        kwargs, missing = {}, []
+        for pname, p in sig.parameters.items():
+            if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+                continue
+            if pname in values:
+                kwargs[pname] = values[pname]
+            elif p.default is inspect.Parameter.empty:
+                missing.append(pname)
+        if missing:
+            raise TypeError(f"parâmetros obrigatórios não mapeados: {missing}")
+        logo = resolve_company_logo(**kwargs)
+        if isinstance(logo, str):
+            logo = {"logo_url": logo}
+        if isinstance(logo, dict) and logo:
+            return logo, "resolve_company_logo"
+    except Exception as exc:
+        origem = f"fallback favicon ({type(exc).__name__}: {exc})"
+    else:
+        origem = "fallback favicon (resolve_company_logo devolveu vazio)"
+
+    domain = email.split("@")[-1] if "@" in email else ""
+    initials = "".join(re.findall(r"[A-Za-z0-9]", razao))[:3].upper() or "EMP"
+    logo = {"fallback_initials": initials}
+    if domain and domain not in _FREE_MAIL:
+        logo["google_favicon_url"] = f"https://www.google.com/s2/favicons?domain={domain}&sz=128"
+    return logo, origem
+
+
+def _cat_enrich(args):
+    app, cnpj, fallback, with_logo = args
+    with app.app_context():
+        used = cnpj
+        data = _cat_brasilapi(cnpj)
+        if not data and fallback and fallback != cnpj:
+            used, data = fallback, _cat_brasilapi(fallback)
+        if not data:
+            return None
+        if with_logo:
+            logo, origem = _cat_logo(data, used)
+        else:
+            logo, origem = {}, "filial"
+        return used, data, logo, origem
+
+
+@api_bp.route("/company-catalog", methods=["GET"])
+@api_bp.route("/companies/search", methods=["GET"])
+def search_companies_catalog():
+    """Catálogo: todas as empresas cujo nome contém o termo, agrupáveis por raiz de CNPJ
+    (matriz + filiais vistas nos processos), cada uma com logo, razão social e CNPJ.
+    O frontend envia o CNPJ escolhido a POST /search-company (modo STRICT_CNPJ)."""
+    q = (request.args.get("q") or "").strip()
+    debug = request.args.get("debug") == "1"
+    include_branches = request.args.get("include_branches", "1") != "0"
+    try:
+        limit = max(1, min(int(request.args.get("limit", CATALOG_MAX_ROOTS)), CATALOG_MAX_ROOTS))
+    except ValueError:
+        limit = CATALOG_MAX_ROOTS
+    if len(q) < 3:
+        return jsonify({"error": "Informe ao menos 3 caracteres.", "items": []}), 400
+    if not is_valid_company_search_input(q):
+        return jsonify({"error": "empresas so são pesquisadas por razão social ou CNPJ", "items": []}), 400
+
+    key = (_cat_norm(q), include_branches, limit)
+    if not debug:
+        hit = CATALOG_CACHE.get(key)
+        if hit and time.time() - hit[0] < CATALOG_TTL:
+            return jsonify(hit[1]), 200
+
+    dbg = {"consulta": q}
+    app = current_app._get_current_object()
+    counts, seen = {}, {}   # raiz -> nº de processos que a citam / CNPJs completos vistos
+
+    try:
+        digits_q = re.sub(r"\D", "", q)
+        if is_cnpj(q) and _cat_valid(digits_q):
+            counts[digits_q[:8]] = 0
+            seen[digits_q[:8]] = {digits_q}
+            dbg["descoberta"] = "CNPJ informado"
+        else:
+            strat = resolve_search_strategy(q, brasil_api_fetcher=fetch_cnpj_brasilapi)
+            brand = strat.get("comunica_query_term") or q
+            dbg["termo_pje"] = brand
+
+            processes_map = {}
+            try:
+                processes_map = orchestrator._fetch_comunica_pje(
+                    brand, max_pages=CATALOG_PAGES, page_size=50
+                ) or {}
+            except Exception as exc:
+                dbg["pje_erro"] = f"{type(exc).__name__}: {exc}"
+                logger.warning("Catálogo: Comunica PJe falhou para '%s': %s", brand, exc)
+            dbg["pje_processos"] = len(processes_map)
+
+            # 1) CNPJs nos textos das publicações (contados 1x por processo e por raiz)
+            for proc in processes_map.values():
+                here = {}
+                for txt in proc.get("publicacoes_texto", []) or []:
+                    for m in CNPJ_REGEX.findall(str(txt)):
+                        d = re.sub(r"\D", "", m)
+                        if _cat_valid(d):
+                            here.setdefault(d[:8], set()).add(d)
+                for root, cnpjs in here.items():
+                    counts[root] = counts.get(root, 0) + 1
+                    seen.setdefault(root, set()).update(cnpjs)
+            dbg["cnpjs_nos_textos"] = len(counts)
+
+            # 2) Descoberta já existente no projeto (grupo/marca)
+            try:
+                for ent in discover_company_cnpjs(q, brand, processes_map, search_strategy=strat) or []:
+                    d = re.sub(r"\D", "", str(ent))
+                    if _cat_valid(d):
+                        counts.setdefault(d[:8], 0)
+                        seen.setdefault(d[:8], set()).add(d)
+            except Exception as exc:
+                dbg["discover_erro"] = f"{type(exc).__name__}: {exc}"
+            dbg["raizes_candidatas"] = len(counts)
+
+        roots = sorted(counts, key=lambda r: -counts[r])[:limit]
+        jobs = [(app, _cat_matrix(r), sorted(seen[r])[0], True) for r in roots]
+        n_matrizes = len(jobs)
+        if include_branches:
+            budget = CATALOG_MAX_BRANCH_JOBS
+            for r in roots:
+                mat = _cat_matrix(r)
+                for c in [c for c in sorted(seen[r]) if c != mat][:CATALOG_BRANCHES_PER_ROOT]:
+                    if budget <= 0:
+                        break
+                    jobs.append((app, c, None, False))
+                    budget -= 1
+
+        by_cnpj = is_cnpj(q)          # busca por CNPJ não passa pelo filtro de nome
+        tokens = [] if by_cnpj else _cat_norm(q).split()
+        items, emitted = [], set()
+        descartados = sem_resposta = 0
+        logos = {"resolve_company_logo": 0, "fallback": 0}
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for job, res in zip(jobs, pool.map(_cat_enrich, jobs)):
+                if not res:
+                    sem_resposta += 1
+                    continue
+                cnpj, data, logo, origem = res
+                if cnpj in emitted:
+                    continue
+                haystack = _cat_norm(f"{data.get('razao_social', '')} {data.get('nome_fantasia') or ''}")
+                if not all(t in haystack for t in tokens):
+                    descartados += 1
+                    continue
+                emitted.add(cnpj)
+                if origem != "filial":
+                    logos["resolve_company_logo" if origem == "resolve_company_logo" else "fallback"] += 1
+                    if origem != "resolve_company_logo":
+                        dbg.setdefault("logo_motivo_fallback", origem)
+                items.append({
+                    "cnpj": cnpj,
+                    "cnpj_root": cnpj[:8],
+                    "razao_social": data.get("razao_social"),
+                    "nome_fantasia": data.get("nome_fantasia") or None,
+                    "situacao": data.get("descricao_situacao_cadastral"),
+                    "capital_social": data.get("capital_social"),
+                    "municipio": data.get("municipio"),
+                    "uf": data.get("uf"),
+                    "matriz": cnpj[8:12] == "0001",
+                    "processos_encontrados": counts.get(cnpj[:8], 0),
+                    "logo": logo,
+                    "logo_url": (logo.get("logo_url") or logo.get("google_favicon_url")
+                                 or logo.get("logo_primary_url")),
+                })
+        dbg["brasilapi"] = {"consultas": len(jobs), "matrizes": n_matrizes,
+                            "sem_resposta": sem_resposta, "descartados_por_nome": descartados}
+        dbg["logos"] = logos
+
+        items.sort(key=lambda c: (c["situacao"] != "ATIVA", -c["processos_encontrados"],
+                                  _cat_norm(c["razao_social"]), c["cnpj_root"],
+                                  not c["matriz"], c["cnpj"]))
+        payload = {"query": q, "count": len(items), "items": items}
+        if debug:
+            payload["debug"] = dbg
+        if not items:
+            logger.info("Catálogo sem resultados para '%s': %s", q, dbg)
+            return jsonify({**payload, "error": "NOT_FOUND"}), 404
+        CATALOG_CACHE[key] = (time.time(), {k: v for k, v in payload.items() if k != "debug"})
+        return jsonify(payload), 200
+    except Exception as exc:
+        logger.exception("Erro no catálogo de empresas ('%s'): %s", q, exc)
+        body = {"error": "Erro interno ao montar o catálogo.", "items": []}
+        if debug:
+            body["debug"] = {**dbg, "excecao": f"{type(exc).__name__}: {exc}"}
+        return jsonify(body), 500
+
+
 @api_bp.route("/search_status/<int:search_id>", methods=["GET"])
 @api_bp.route("/search-status/<int:search_id>", methods=["GET"])
 def get_search_status(search_id: int):
