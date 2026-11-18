@@ -15,6 +15,7 @@ from app.utils.sanitizer import (
     classify_search_mode,
     resolve_search_strategy,
 )
+from app.utils.http_client import request_gov_br_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -230,10 +231,31 @@ class CNJProcessSearcher:
         self.session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             ),
             "Accept": "application/json",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
         })
+
+    def _request_gov(
+        self,
+        method: str,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        json_body: Optional[Any] = None,
+        timeout: float = 8.0,
+    ) -> requests.Response:
+        """Encaminha requisições ao Judiciário com headers pt-BR e fallback anti-geoblocking."""
+        return request_gov_br_with_fallback(
+            method=method,
+            url=url,
+            headers=headers,
+            params=params,
+            json_body=json_body,
+            timeout=timeout,
+            session=self.session,
+        )
 
     @staticmethod
     def clean_company_name(name: str) -> str:
@@ -380,7 +402,7 @@ class CNJProcessSearcher:
         self.last_page_raw_count = 0
         self.last_page_has_more = False
         try:
-            r = self.session.get(self.COMUNICA_URL, params=p, timeout=timeout)
+            r = self._request_gov("GET", self.COMUNICA_URL, params=p, timeout=timeout)
             if r.status_code == 200:
                 py = r.json()
                 items = py if isinstance(py, list) else (
@@ -426,7 +448,7 @@ class CNJProcessSearcher:
                 "itensPorPagina": 50,
             }
             try:
-                resp = self.session.get(self.COMUNICA_URL, params=params, timeout=timeout)
+                resp = self._request_gov("GET", self.COMUNICA_URL, params=params, timeout=timeout)
                 if not resp.ok:
                     logger.warning("Comunica PJe HTTP %s na página %d para '%s'", resp.status_code, page, query_term)
                     break
@@ -468,7 +490,7 @@ class CNJProcessSearcher:
                     "pagina": 1,
                     "itensPorPagina": 50,
                 }
-                resp_tst = self.session.get(self.COMUNICA_URL, params=params_tst, timeout=timeout)
+                resp_tst = self._request_gov("GET", self.COMUNICA_URL, params=params_tst, timeout=timeout)
                 if resp_tst.ok:
                     py_tst = resp_tst.json()
                     tst_items = py_tst if isinstance(py_tst, list) else (
@@ -526,7 +548,7 @@ class CNJProcessSearcher:
                     "itensPorPagina": 50,  # NUNCA passar de 50! Limite oficial da API.
                 }
                 try:
-                    resp = self.session.get(self.COMUNICA_URL, params=params, timeout=20)
+                    resp = self._request_gov("GET", self.COMUNICA_URL, params=params, timeout=20)
                     if resp.status_code != 200:
                         logger.warning("Comunica PJe HTTP %s para termo '%s'", resp.status_code, term)
                         break
@@ -556,7 +578,7 @@ class CNJProcessSearcher:
                 "pagina": 1,
                 "itensPorPagina": 50,
             }
-            resp_tst = self.session.get(self.COMUNICA_URL, params=params_tst, timeout=10)
+            resp_tst = self._request_gov("GET", self.COMUNICA_URL, params=params_tst, timeout=10)
             if resp_tst.ok:
                 payload_tst = resp_tst.json()
                 tst_items = payload_tst if isinstance(payload_tst, list) else (
@@ -591,7 +613,7 @@ class CNJProcessSearcher:
         total_count = None
         has_more = False
         try:
-            resp = self.session.get(self.COMUNICA_URL, params=params_p1, timeout=5.0)
+            resp = self._request_gov("GET", self.COMUNICA_URL, params=params_p1, timeout=5.0)
             if resp.ok:
                 payload = resp.json()
                 if isinstance(payload, dict):
@@ -617,7 +639,7 @@ class CNJProcessSearcher:
             def _fetch_single_page(p_num: int) -> List[Any]:
                 p = {"nomeParte": clean_brand, "pagina": p_num, "itensPorPagina": 50}
                 try:
-                    r = self.session.get(self.COMUNICA_URL, params=p, timeout=5.0)
+                    r = self._request_gov("GET", self.COMUNICA_URL, params=p, timeout=5.0)
                     if r.ok:
                         py = r.json()
                         return py if isinstance(py, list) else (
@@ -642,7 +664,7 @@ class CNJProcessSearcher:
                 "pagina": 1,
                 "itensPorPagina": 50,
             }
-            resp_tst = self.session.get(self.COMUNICA_URL, params=params_tst, timeout=5.0)
+            resp_tst = self._request_gov("GET", self.COMUNICA_URL, params=params_tst, timeout=5.0)
             if resp_tst.ok:
                 py_tst = resp_tst.json()
                 tst_items = py_tst if isinstance(py_tst, list) else (
@@ -689,7 +711,7 @@ class CNJProcessSearcher:
                     }
                 }
                 try:
-                    resp = self.session.post(url, json=body, headers=headers, timeout=6.0)
+                    resp = self._request_gov("POST", url, json_body=body, headers=headers, timeout=6.0)
                     if resp.status_code == 200:
                         hits = resp.json().get("hits", {}).get("hits", [])
                         for hit in hits:
@@ -751,7 +773,7 @@ class CNJProcessSearcher:
                 }
             }
             try:
-                resp = self.session.post(url, json=body, headers=headers, timeout=timeout)
+                resp = self._request_gov("POST", url, json_body=body, headers=headers, timeout=timeout)
                 if resp.status_code == 200:
                     return resp.json().get("hits", {}).get("hits", [])
             except Exception as exc:

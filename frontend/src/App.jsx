@@ -118,6 +118,29 @@ function normalize(raw) {
   };
 }
 
+async function prefetchFromComunicaPjeBrowser(termo) {
+  try {
+    const clean = String(termo || '').trim();
+    if (!clean || clean.length < 2) return [];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const url = `https://comunicaapi.pje.jus.br/api/v1/comunicacao?nomeParte=${encodeURIComponent(clean)}&itensPorPagina=100`;
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => null);
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.items)) return data.items;
+    if (data && Array.isArray(data.itens)) return data.itens;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
 async function request(path, options = {}) {
   let response;
   const endpoint = `${API_BASE}/api/v1${path}`;
@@ -1072,9 +1095,22 @@ export default function App() {
     setBusy(true);
     setError('');
     try {
+      // Fallback silencioso: prefetch transparente via browser contra bloqueios de geoblocking nos EUA
+      let prefetched = [];
+      try {
+        prefetched = await prefetchFromComunicaPjeBrowser(text);
+      } catch {
+        prefetched = [];
+      }
+
+      const payload = { company_name: text };
+      if (Array.isArray(prefetched) && prefetched.length > 0) {
+        payload.client_prefetched_items = prefetched;
+      }
+
       const result = await request('/search-company', {
         method: 'POST',
-        body: JSON.stringify({ company_name: text }),
+        body: JSON.stringify(payload),
       });
       const normalized = normalize(result);
       if (!normalized) throw new Error('A API não retornou dados de empresa válidos.');
