@@ -130,3 +130,37 @@ def test_clear_search_history_endpoint(client, app):
         # Confirma que foi limpo
         assert CompanySearch.query.count() == 0
         assert ProcessRecord.query.count() == 0
+
+
+def test_company_catalog_endpoint_resilience(client):
+    """
+    Testa resiliência do catálogo de empresas:
+    1. Busca por 'Bradesco' retorna 200 com itens e metadados oficiais.
+    2. Busca por 'Picpay' retorna 200 com matriz e instituição de pagamento.
+    3. Busca por empresa inexistente retorna 200 com lista vazia (sem quebrar com 404).
+    """
+    # 1. Bradesco
+    r = client.get("/api/v1/company-catalog?q=Bradesco&limit=100")
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["query"] == "Bradesco"
+    assert data["count"] >= 5
+    cnpjs = [item["cnpj"] for item in data["items"]]
+    assert "60746948000112" in cnpjs
+    first_item = data["items"][0]
+    assert "razao_social" in first_item
+    assert "situacao" in first_item
+    assert "logo_url" in first_item
+
+    # 2. Picpay
+    r_pic = client.get("/api/v1/company-catalog?q=Picpay&limit=100")
+    assert r_pic.status_code == 200
+    data_pic = r_pic.get_json()
+    assert data_pic["count"] >= 1
+
+    # 3. Termo inexistente
+    r_none = client.get("/api/v1/company-catalog?q=EmpresaInexistenteXYZ123&limit=100")
+    assert r_none.status_code == 200
+    data_none = r_none.get_json()
+    assert data_none["count"] == 0
+    assert data_none["items"] == []

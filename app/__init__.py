@@ -69,6 +69,9 @@ def create_app(config_name: str = None) -> Flask:
     # Cria tabelas no banco de dados se não existirem
     with app.app_context():
         try:
+            from app.models.company_search import CompanySearch  # noqa: F401
+            from app.models.process_record import ProcessRecord  # noqa: F401
+            from app.models.CompanyRegistry import CompanyRegistry  # noqa: F401
             db.create_all()
             if db.engine.dialect.name == "postgresql":
                 with db.engine.connect() as conn:
@@ -82,6 +85,34 @@ def create_app(config_name: str = None) -> Flask:
                     conn.execute(db.text("ALTER TABLE process_records ALTER COLUMN grau TYPE VARCHAR(50);"))
                     conn.execute(db.text("ALTER TABLE process_records ALTER COLUMN tribunal TYPE VARCHAR(50);"))
                     conn.commit()
+
+            # Pré-semeia CompanyRegistry com os metadados de grandes corporações para máxima velocidade
+            try:
+                import re
+                from app.models.CompanyRegistry import CompanyRegistry
+                from app.models.company_search import get_utc_now
+                from app.services.economic_service import OFFICIAL_CORPORATE_METADATA
+                if CompanyRegistry.query.count() == 0:
+                    now = get_utc_now()
+                    for c_cnpj, meta in OFFICIAL_CORPORATE_METADATA.items():
+                        c_clean = re.sub(r"\D", "", c_cnpj)
+                        reg = CompanyRegistry(
+                            cnpj=c_clean,
+                            razao_social=meta["razao_social"][:255],
+                            nome_fantasia=meta.get("nome_fantasia", "")[:255] or None,
+                            situacao_cadastral=meta.get("descricao_situacao_cadastral", "ATIVA")[:50],
+                            matriz_filial="1" if meta.get("identificador_matriz_filial") == 1 else "2",
+                            municipio=meta.get("municipio", "")[:150] or None,
+                            uf=meta.get("uf", "")[:2] or None,
+                            capital_social=meta.get("capital_social", 0.0),
+                            created_at=now,
+                            updated_at=now,
+                        )
+                        db.session.add(reg)
+                    db.session.commit()
+            except Exception as e_seed:
+                db.session.rollback()
+                app.logger.debug("Semeio de CompanyRegistry ignorado/já presente: %s", e_seed)
         except Exception as exc:
             app.logger.warning("Não foi possível conectar imediatamente ao PostgreSQL para db.create_all(): %s", exc)
 

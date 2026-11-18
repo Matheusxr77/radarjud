@@ -1,0 +1,64 @@
+﻿ID;Módulo;Cenário;Pré-requisito;Passo a Passo;Dados de Entrada;Resultado Esperado;Status;Regra de Negócio
+TC-01;1. Busca & Catálogo;Busca ampla por marca comercial (Conglomerado / Grupo);Frontend e Backend ativos.;"1. Acesse http://localhost:5173 na página de Pesquisa.
+2. Digite 'BRADESCO' e clique em 'Pesquisar'.
+3. Observe o redirecionamento para o Catálogo.
+4. Verifique o banner superior e a lista de empresas encontradas.";BRADESCO;"1. Abre a tela de Catálogo de Empresas.
+2. Exibe o botão de destaque 'Analisar grupo econômico inteiro (todas as empresas e filiais)'.
+3. Lista as empresas vinculadas: Banco Bradesco S.A., Bradesco Seguros, Bradesco Saúde, etc.";A Validar;Modo BROAD_BRAND mapeia todas as unidades do grupo sem colapsar incorretamente.
+TC-02;1. Busca & Catálogo;Consolidação de Grupo Econômico (Multi-Raízes);Estar no catálogo da busca por 'BRADESCO'.;"1. No catálogo da busca por 'BRADESCO', clique no card azul de destaque 'Analisar grupo econômico inteiro'.
+2. Aguarde o carregamento dos indicadores de risco.";Clique em 'Analisar grupo econômico inteiro';"1. Título exibe: 'BRADESCO (GRUPO CONSOLIDADO / FILIAIS)'.
+2. Capital Social Consolidado exibe mais de R$ 115 Bilhões (somando matriz bancária, seguradora e previdência).
+3. Subtítulo indica cobertura de múltiplas filiais/unidades mapeadas.
+4. Classificação: Cenário A (Solvência Comprovada).";A Validar;Soma das pessoas jurídicas reais do conglomerado (elimina bug do CNPJ único de R$ 93 Bi).
+TC-03;1. Busca & Catálogo;Busca direta por CNPJ específico (Modo Estrito);Página inicial de Pesquisa.;"1. No campo de busca, cole o CNPJ formatado: '60.746.948/0001-12' (ou apenas 14 dígitos).
+2. Clique em 'Pesquisar'.";60.746.948/0001-12;"1. O sistema pula o catálogo e abre diretamente a Visão Geral (Overview).
+2. Título exibe 'BANCO BRADESCO S.A.' com badge indicando busca estrita de unidade.
+3. Analisa exclusivamente os processos onde esse CNPJ é polo passivo.";A Validar;Modo STRICT_CNPJ isola unidade contratada específica para auditoria de terceirização.
+TC-04;1. Busca & Catálogo;Tolerância a erros de digitação (Busca Difusa / Fuzzy Matching);Página inicial de Pesquisa.;"1. Digite propositalmente com erro: 'PICPY'.
+2. Clique em 'Pesquisar'.";PICPY;"1. O catálogo identifica a marca aproximada e sugere/carrega 'PICPAY'.
+2. Não retorna tela em branco ou erro 500.
+3. Permite selecionar as entidades da PicPay com Capital Social de R$ 6,1 Bi.";A Validar;Resiliência contra typos e abreviações corporativas informais.
+TC-05;2. Idoneidade Econômica & Solvência;Auditoria de Solvência - Cenário A (Solvência Robusta);Overview carregado com Bradesco, Itaú, Banco do Brasil ou PicPay.;"1. Na Visão Geral, role até a seção 'Idoneidade Econômica & Risco de Exposição Subsidiária'.
+2. Verifique o card verde do Cenário A.
+3. Verifique os valores de Capital Social, Situação RFB e Probabilidade de Insolvência.";Visualização do card de Idoneidade;"1. Badge verde 'Cenário A - Solvência Comprovada'.
+2. Situação Cadastral RFB: 'ATIVA'.
+3. Probabilidade de Insolvência inferior a 1,5%.
+4. Parecer formal explicando que o tomador de serviços possui baixo risco de responder subsidiariamente (Súmula 331 TST).";A Validar;Lastro patrimonial verificado perante a Receita Federal afasta penhora sobre o tomador.
+TC-06;2. Idoneidade Econômica & Solvência;Logomarca Corporativa Real e Iniciais Inteligentes;Overview carregado com Bradesco, PicPay ou Compesa.;1. Olhe para o cabeçalho superior esquerdo do painel ao lado do nome da empresa.;Visualização da Logo;"1. Exibe a logo oficial colorida da empresa (ex: favicon oficial de bradesco.com.br, picpay.com ou compesa.com.br).
+2. Se indisponível, exibe avatar com as iniciais reais da marca (ex: 'BB', 'CP', 'IT') e NÃO ícone de globo genérico quebrado.";A Validar;Identidade corporativa profissional integrada à resolução DNS de domínios.
+TC-07;3. Passivo Judicial & Desfechos;Consistência Matemática entre Eventos e Desfechos Mapeados;Qualquer empresa pesquisada com processos (ex: Bradesco ou PicPay).;"1. Verifique o card 'EVENTOS IDENTIFICADOS' no topo.
+2. Verifique o card 'DESFECHOS MAPEADOS' ao lado.
+3. Role até a tabela/gráfico de Desfechos de Sentenças e some: Condenações + Acordos + Improcedências + Em Aberto.";Valores dos cards;"1. O número do card 'Eventos Identificados' deve ser EXATAMENTE IGUAL ao número do card 'Desfechos Mapeados'.
+2. A soma dos 4 tipos de desfechos deve ser estritamente igual ao total de processos identificados.";A Validar;Invariante matemática do sistema: nenhum processo pode ser descartado sem classificação.
+TC-08;3. Passivo Judicial & Desfechos;Classificação de Fases de Execução e Cumprimento de Sentença;Acessar a aba 'Processos' no menu lateral.;"1. Clique em 'Processos' na barra lateral.
+2. Filtre por 'Condenações'.
+3. Procure processos que contenham termos como 'execução', 'cumprimento de sentença' ou código TPU 219.";Aba 'Processos' -> Filtro 'Condenação';"1. Processos em fase de execução/cumprimento de sentença são devidamente computados como 'Condenação' com impacto financeiro.
+2. Não ficam erroneamente classificados como 'Em Aberto'.";A Validar;Fase de execução indica condenação judicial prévia com obrigação de pagamento confirmada.
+TC-09;4. Inteligência Preditiva Bayesiana;Soma 100% da Distribuição Dirichlet-Multinomial;Aba 'Previsões' ou seção de Previsão de Sentença no Overview.;"1. Verifique as probabilidades calculadas: P(Vitória), P(Acordo) e P(Condenação).
+2. Some os três valores percentuais para qualquer motivo avaliado.";Percentuais da Matriz Preditiva;"1. A soma: P(Vitória) + P(Acordo) + P(Condenação) deve resultar exatamente em 100,0%.
+2. Intervalo de Credibilidade de 90% (IC 90%) exibido ao lado da estimativa pontual.";A Validar;Pura estatística bayesiana conjugada sem alucinações de LLM generativo.
+TC-10;4. Inteligência Preditiva Bayesiana;Regra Crítica de Previsão Zero para Empresa Sem Condenações;Pesquisar empresa cadastrada que nunca teve condenação nos tribunais consultados.;"1. Pesquise uma empresa ou fornecedor sem histórico de condenação.
+2. Verifique o indicador de Previsão de Condenação.";Empresa com 0 condenações prévias;"1. O sistema bloqueia a previsão de condenação e exibe: '0,0%' ou 'Previsão Bloqueada'.
+2. Exibe justificativa legal: ausência de registros condenatórios prévios (presunção de conformidade).";A Validar;Garantia jurídica contra predições especulativas desprovidas de lastro probatório.
+TC-11;5. Relatório Executivo em PDF;Exportação de Relatório PDF para Grupo com Barras no Nome (Sem 404);Tela com 'BRADESCO (GRUPO CONSOLIDADO / FILIAIS)' carregada.;"1. No canto superior direito da tela, localize e clique no botão verde 'Baixar Relatório (PDF)'.
+2. Observe a mudança do botão para 'Gerando...'.
+3. Aguarde o download do arquivo no navegador.";Clique no botão 'Baixar Relatório (PDF)';"1. O navegador NÃO exibe erro 404 Not Found.
+2. Faz o download do arquivo: 'Relatorio_RiskTech_BRADESCO_GRUPO_CONSOLIDADO_FILIAIS_...pdf'.
+3. O PDF gerado abre corretamente com cabeçalho, Cenário A, Capital Social e tabela de desfechos completa.";A Validar;Rota com path parameter e payload POST garantem integridade mesmo com barras '/' e parênteses.
+TC-12;5. Relatório Executivo em PDF;Exportação de PDF via URL direta ou Histórico;Empresa já consultada anteriormente.;"1. Abra a aba 'Histórico' no menu lateral.
+2. Clique em qualquer consulta salva.
+3. Na visualização, clique em 'Baixar Relatório (PDF)'.";Download via Histórico ID;"1. O PDF é gerado e baixado com sucesso em menos de 1 segundo.
+2. O documento reflete fielmente as métricas históricas da consulta.";A Validar;Geração síncrona com fallback ReportLab / Pure PDF.
+TC-13;6. Histórico & Compartilhamento;Compartilhamento de Link de Análise para Terceiros;Empresa analisada na tela.;"1. No cabeçalho, clique no botão 'Compartilhar' (ícone de link/share).
+2. Abra uma nova aba anônima no navegador e cole a URL copiada (ex: http://localhost:5173/?searchId=...).
+3. Pressione Enter.";URL compartilhada com ?searchId=...;"1. A página carrega diretamente os dados completos daquela empresa sem disparar nova varredura lenta no CNJ.
+2. Todos os gráficos, solvência e predições são exibidos instantaneamente.";A Validar;Compartilhamento idempotente para auditoria interna de compras e compliance.
+TC-14;7. Resiliência & Anti-Geoblocking;Busca Resiliente com Fallback Invisível;Ambiente rodando (ou com proxy simulado).;"1. Pesquise qualquer empresa ativa no Comunica PJe (ex: 'COMPESA' ou 'PETROBRAS').
+2. Observe a velocidade de resposta do Fast-Path (primeira página).";COMPESA;"1. A resposta do Fast-Path retorna em menos de 3 segundos.
+2. Se o IP do servidor sofrer bloqueio geográfico (ex: em nuvem americana), o browser repassa as intimações silenciosamente via client_prefetched_items.
+3. O usuário nunca vê mensagens de erro de rede ou bloqueio.";A Validar;Arquitetura Tripla Anti-Geoblocking (Vercel Edge gru1 + Render + Browser Prefetch).
+TC-15;8. Responsividade & Usabilidade;Navegação Mobile e Redimensionamento de Tela;Abrir o navegador com Ferramentas do Desenvolvedor (F12) em modo responsivo (ex: iPhone ou Galaxy).;"1. Reduza a largura da janela para menos de 768px.
+2. Observe a gaveta (sidebar) lateral e o botão de menu hambúrguer.
+3. Clique no botão de menu, navegue entre as abas e clique fora para fechar o overlay.";Tela com largura 375px - 414px;"1. O menu lateral colapsa e abre suavemente via overlay sem quebrar o layout.
+2. Os cards de Idoneidade e Métricas se reorganizam verticalmente de forma legível.
+3. O botão de 'Baixar Relatório (PDF)' permanece acessível e clicável.";A Validar;Acessibilidade e usabilidade para gestores em dispositivos móveis.
