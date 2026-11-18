@@ -1,3 +1,7 @@
+from app.extensions import db
+from app.models.company_search import get_utc_now
+
+
 class CompanyRegistry(db.Model):
     __tablename__ = "company_registry"
 
