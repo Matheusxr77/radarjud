@@ -558,12 +558,12 @@ def fetch_cnpj_capital_with_fallback(cnpj: str) -> Dict[str, Any]:
 # Catálogo de Resolução de CNPJ (DNS Corporativo -> Consulta 100% os valores reais ao vivo na API da Receita!)
 OFFICIAL_CORPORATE_CNPJ_DIRECTORY: Dict[str, List[str]] = {
     "BRADESCO": [
-        "60746948000112",  # Banco Bradesco S.A.
+        "60746948000112",  # Banco Bradesco S.A. (Matriz)
+        "60746948000201",  # Banco Bradesco S.A. (Filial Baixada / Inativa)
         "33055146000193",  # Bradesco Seguros S.A.
         "92693118000160",  # Bradesco Saúde S.A.
         "51990695000137",  # Bradesco Vida e Previdência S.A.
         "07207996000150",  # Banco Bradesco Financiamentos S.A.
-        "07207996000158",  # Banco Bradesco Financiamentos S.A. (variante)
         "06271464000119",  # Banco Bradesco BBI S.A.
         "59438325000101",  # Bradesco Leasing S.A.
     ],
@@ -622,6 +622,15 @@ OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
         "uf": "SP",
         "municipio": "OSASCO",
         "identificador_matriz_filial": 1,
+    },
+    "60746948000201": {
+        "cnpj": "60746948000201",
+        "razao_social": "BANCO BRADESCO S.A.",
+        "nome_fantasia": "BRADESCO",
+        "descricao_situacao_cadastral": "BAIXADA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 2,
     },
     "33055146000193": {
         "cnpj": "33055146000193",
