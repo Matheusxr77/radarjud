@@ -3,11 +3,9 @@ import {
   Search, LayoutDashboard, FileText, ChartNoAxesCombined, History,
   Menu, X, ArrowRight, RefreshCw, AlertCircle, AlertTriangle, ShieldCheck, ShieldAlert,
   Info, ChevronRight, Building2, TrendingUp, Filter, CheckCircle2,
-  Check, Activity, BarChart3, Radar, Share2, Download,
+  Check, Activity, BarChart3, Radar, Share2, Download, Library
 } from 'lucide-react';
 import { companyHash, companyShareUrl, isCompanyPage, parseRoute, validSearchId } from './companyNavigation.js';
-  Check, Activity, BarChart3, Radar, Library,
-} from 'lucide-react';
 import { CompanyLogo } from "./CompanyLogo.jsx";
 import CatalogPage, { normalizeCatalog, onlyDigits } from './CatalogPage.jsx';
 
@@ -1142,7 +1140,14 @@ export default function App() {
           <div className="region"><span className="region-dot" /> CNJ DataJud · Comunica PJe</div>
         </header>
         <main className="content">
-          {page === 'search' && <SearchPage onSearch={search} query={query} setQuery={setQuery} busy={busy} error={error} navigate={navigate} result={data} />}
+          {page === 'search' && <SearchPage onSearch={submitSearch} query={query} setQuery={setQuery} busy={busy} error={error} navigate={navigate} result={data} />}
+          {page === 'catalog' && (
+            <CatalogPage
+              query={query} setQuery={setQuery} catalog={catalog} onSubmit={submitSearch}
+              onAnalyze={analyzeCatalogItem} onAnalyzeGroup={analyzeGroup}
+              analyzing={analyzing} analysisBusy={busy} analysisError={error}
+            />
+          )}
           {isCompanyPage(page) && needsSharedData && (
             sharedError?.id === searchId ? (
               <div className="alert error" role="alert">
@@ -1153,24 +1158,13 @@ export default function App() {
           )}
           {isCompanyPage(page) && !needsSharedData && <>
             {visibleData && <CompanyShareActions key={visibleData.searchId ?? visibleData.name} data={visibleData} />}
-            {page === 'overview' && <Overview data={visibleData} navigate={navigate} />}
+            {page === 'overview' && <Overview data={visibleData} navigate={navigate} catalogTerm={catalog.term} />}
             {page === 'processes' && <Processes data={visibleData} />}
             {page === 'predictions' && <Predictions data={visibleData} />}
           </>}
-          {page === 'search' && <SearchPage onSearch={submitSearch} query={query} setQuery={setQuery} busy={busy} error={error} navigate={navigate} result={data} />}
-          {page === 'catalog' && (
-            <CatalogPage
-              query={query} setQuery={setQuery} catalog={catalog} onSubmit={submitSearch}
-              onAnalyze={analyzeCatalogItem} onAnalyzeGroup={analyzeGroup}
-              analyzing={analyzing} analysisBusy={busy} analysisError={error}
-            />
-          )}
-          {page === 'overview' && <Overview data={data} navigate={navigate} catalogTerm={catalog.term} />}
-          {page === 'processes' && <Processes data={data} />}
-          {page === 'predictions' && <Predictions data={data} />}
           {page === 'history' && <HistoryPage history={history} busy={historyBusy} error={historyError} onOpen={openHistory} onReload={loadHistory} />}
         </main>
-        <footer className="footer">RadarJus · Inteligência Preditiva e Gestão de Risco de Fornecedores</footer>
+        <footer className="footer">RadarJus · Inteligência Preditiva</footer>
       </div>
     </div>
   );
