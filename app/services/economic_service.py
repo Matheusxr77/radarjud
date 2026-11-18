@@ -489,22 +489,29 @@ def _fetch_from_receitaws(digits: str, headers: dict, timeout: float) -> dict:
 
 def _fetch_accurate_cnpj_data_impl(digits: str, timeout: float = 4.0) -> dict:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept": "application/json",
     }
     fetchers = {
-        "brasilapi": _fetch_from_brasilapi,
         "cnpjws": _fetch_from_cnpjws,
-        "minhareceita": _fetch_from_minhareceita,
         "receitaws": _fetch_from_receitaws,
+        "brasilapi": _fetch_from_brasilapi,
+        "minhareceita": _fetch_from_minhareceita,
     }
     provider_order = _get_next_provider_order()
+    best_res = {}
     for prov in provider_order:
         fn = fetchers.get(prov)
         if fn:
             res = fn(digits, headers, timeout)
             if res and res.get("razao_social"):
-                return res
+                cap = float(res.get("capital_social") or 0.0)
+                if cap > 0.0:
+                    return res
+                if not best_res:
+                    best_res = res
+    if best_res:
+        return best_res
     return {}
 
 
@@ -533,9 +540,64 @@ def fetch_accurate_cnpj_data_cached(cnpj: str, timeout: float = 4.0) -> dict:
 
     res = _fetch_accurate_cnpj_data_impl(digits, timeout=timeout)
     if res and res.get("razao_social"):
+        cap_val = float(res.get("capital_social") or 0.0)
+        if cap_val > 0.0:
+            with _CACHE_LOCK:
+                CNPJ_ROOT_CACHE[root] = res
+            return res
+
+    # 1. Fallback em metadados oficiais corporativos (quando a API estiver offline ou com capital desatualizado/zero)
+    if digits in OFFICIAL_CORPORATE_METADATA:
+        meta = OFFICIAL_CORPORATE_METADATA[digits]
+        cap_meta = float(meta.get("capital_social") or 0.0)
+        if cap_meta > 0.0 or not res:
+            meta_res = {
+                "cnpj": digits,
+                "raiz": root,
+                "razao_social": meta.get("razao_social") or (res.get("razao_social") if res else ""),
+                "nome_fantasia": meta.get("nome_fantasia") or (res.get("nome_fantasia") if res else ""),
+                "capital_social": cap_meta if cap_meta > 0.0 else float(res.get("capital_social") or 0.0 if res else 0.0),
+                "porte": "DEMAIS" if cap_meta >= 10_000_000 else "ME/EPP",
+                "situacao": meta.get("descricao_situacao_cadastral") or (res.get("situacao") if res else "ATIVA"),
+                "email": res.get("email", "") if res else "",
+                "qsa_pjs": res.get("qsa_pjs", []) if res else [],
+            }
+            with _CACHE_LOCK:
+                CNPJ_ROOT_CACHE[root] = meta_res
+            return meta_res
+
+    # 2. Fallback no CompanyRegistry local (para qualquer empresa persistida ou mapeada)
+    try:
+        from app.models.CompanyRegistry import CompanyRegistry
+        reg = CompanyRegistry.query.filter_by(cnpj=digits).first()
+        if not reg:
+            mat = to_matrix_cnpj(digits)
+            reg = CompanyRegistry.query.filter_by(cnpj=mat).first()
+        if reg and reg.razao_social:
+            cap_val = float(reg.capital_social or 0.0)
+            if cap_val > 0.0 or not res:
+                db_res = {
+                    "cnpj": reg.cnpj,
+                    "raiz": reg.cnpj[:8],
+                    "razao_social": reg.razao_social,
+                    "nome_fantasia": reg.nome_fantasia or "",
+                    "capital_social": cap_val if cap_val > 0.0 else float(res.get("capital_social") or 0.0 if res else 0.0),
+                    "porte": "DEMAIS" if cap_val >= 10_000_000 else "ME/EPP",
+                    "situacao": reg.situacao_cadastral or "ATIVA",
+                    "email": res.get("email", "") if res else "",
+                    "qsa_pjs": res.get("qsa_pjs", []) if res else [],
+                }
+                with _CACHE_LOCK:
+                    CNPJ_ROOT_CACHE[root] = db_res
+                return db_res
+    except Exception:
+        pass
+
+    if res and res.get("razao_social"):
         with _CACHE_LOCK:
             CNPJ_ROOT_CACHE[root] = res
         return res
+
     return {}
 
 
@@ -565,7 +627,7 @@ OFFICIAL_CORPORATE_CNPJ_DIRECTORY: Dict[str, List[str]] = {
         "51990695000137",  # Bradesco Vida e Previdência S.A.
         "07207996000150",  # Banco Bradesco Financiamentos S.A.
         "06271464000119",  # Banco Bradesco BBI S.A.
-        "59438325000101",  # Bradesco Leasing S.A.
+        "47509120000182",  # Bradesco Leasing S.A. - Arrendamento Mercantil
     ],
     "PICPAY": ["22896431000110", "09516419000175"],
     "PICPAY INSTITUICAO DE PAGAMENTO": ["22896431000110"],
@@ -622,6 +684,7 @@ OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
         "uf": "SP",
         "municipio": "OSASCO",
         "identificador_matriz_filial": 1,
+        "capital_social": 103770000000.0,
     },
     "60746948000201": {
         "cnpj": "60746948000201",
@@ -631,6 +694,7 @@ OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
         "uf": "SP",
         "municipio": "SAO PAULO",
         "identificador_matriz_filial": 2,
+        "capital_social": 0.0,
     },
     "33055146000193": {
         "cnpj": "33055146000193",
@@ -640,6 +704,7 @@ OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
         "uf": "SP",
         "municipio": "BARUERI",
         "identificador_matriz_filial": 1,
+        "capital_social": 8096444545.22,
     },
     "92693118000160": {
         "cnpj": "92693118000160",
@@ -649,6 +714,7 @@ OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
         "uf": "SP",
         "municipio": "BARUERI",
         "identificador_matriz_filial": 1,
+        "capital_social": 4400000000.0,
     },
     "51990695000137": {
         "cnpj": "51990695000137",
@@ -658,6 +724,7 @@ OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
         "uf": "SP",
         "municipio": "BARUERI",
         "identificador_matriz_filial": 1,
+        "capital_social": 4301113376.27,
     },
     "07207996000150": {
         "cnpj": "07207996000150",
@@ -667,6 +734,7 @@ OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
         "uf": "SP",
         "municipio": "SAO PAULO",
         "identificador_matriz_filial": 1,
+        "capital_social": 499300000.0,
     },
     "07207996000158": {
         "cnpj": "07207996000158",
@@ -676,6 +744,7 @@ OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
         "uf": "SP",
         "municipio": "SAO PAULO",
         "identificador_matriz_filial": 1,
+        "capital_social": 499300000.0,
     },
     "06271464000119": {
         "cnpj": "06271464000119",
@@ -685,6 +754,17 @@ OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
         "uf": "SP",
         "municipio": "SAO PAULO",
         "identificador_matriz_filial": 1,
+        "capital_social": 4120000000.0,
+    },
+    "47509120000182": {
+        "cnpj": "47509120000182",
+        "razao_social": "BRADESCO LEASING S.A. - ARRENDAMENTO MERCANTIL",
+        "nome_fantasia": "BRADESCO LEASING",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "BARUERI",
+        "identificador_matriz_filial": 1,
+        "capital_social": 2660000000.0,
     },
     "59438325000101": {
         "cnpj": "59438325000101",
@@ -694,6 +774,7 @@ OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
         "uf": "SP",
         "municipio": "BARUERI",
         "identificador_matriz_filial": 1,
+        "capital_social": 0.0,
     },
     "22896431000110": {
         "cnpj": "22896431000110",
