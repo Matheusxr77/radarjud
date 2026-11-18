@@ -908,7 +908,37 @@ function CompanyShareActions({ data }) {
     setMessage('');
     let objectUrl;
     try {
-      const response = await fetch(`${API_BASE}/api/v1/history/${id}/summary.pdf`);
+      const pdfPayload = {
+        search_id: id || null,
+        empresa: data.name,
+        company_name: data.name,
+        total_processos: data.total,
+        indice_exposicao_financeira: data.riskScore,
+        score_risco_terceirizacao: data.overallRiskScore ?? data.riskScore,
+        desfechos_sentencas: data.outcomes || {},
+        ranking_motivos: data.reasons || [],
+        ranking_motivos_condenacao: data.rankingCondenacoes || [],
+        plus_previsao_condenacao: data.predictions || [],
+        idoneidade_economica: data.idoneidadeEconomica || {},
+        ai_analysis: data.aiAnalysis || {},
+        scan_status: data.scanStatus || 'COMPLETED',
+      };
+
+      // Prioriza POST com os dados já carregados na tela (elimina 404 mesmo sem persistência prévia)
+      let response = await fetch(`${API_BASE}/api/v1/report/pdf`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pdfPayload),
+      }).catch(() => null);
+
+      // Fallback para GET por ID ou query string ?empresa=...
+      if (!response || !response.ok) {
+        const fallbackUrl = id
+          ? `${API_BASE}/api/v1/history/${id}/summary.pdf`
+          : `${API_BASE}/api/v1/report/pdf?empresa=${encodeURIComponent(data.name || '')}`;
+        response = await fetch(fallbackUrl);
+      }
+
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         throw new Error(body?.error || `Não foi possível baixar o PDF (HTTP ${response.status}).`);
@@ -919,7 +949,15 @@ function CompanyShareActions({ data }) {
       objectUrl = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
       anchor.href = objectUrl;
-      anchor.download = `radarjus-empresa-${id}.pdf`;
+      const safeSlug = String(data.name || '')
+        .replace(/\(.*?\)/g, '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .toLowerCase()
+        .slice(0, 40);
+      anchor.download = `radarjus-${safeSlug || (id ? `empresa-${id}` : 'relatorio')}.pdf`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -935,10 +973,10 @@ function CompanyShareActions({ data }) {
   return (
     <section className="company-share card" aria-label="Compartilhar consulta">
       <div className="company-share-row">
-        <div><b>Compartilhar consulta</b><small>{id ? 'Compartilhe a análise salva ou baixe o resumo em PDF.' : 'A consulta ainda não foi salva no banco de dados.'}</small></div>
+        <div><b>Compartilhar consulta</b><small>{id ? 'Compartilhe a análise salva ou baixe o resumo em PDF.' : 'Baixe o relatório executivo em PDF desta análise.'}</small></div>
         <div className="company-share-buttons">
           <button type="button" className="secondary" onClick={copyLink} disabled={!id}><Share2 size={16} /> Compartilhar link</button>
-          <button type="button" className="secondary" onClick={downloadPdf} disabled={!id || pdfBusy}><Download size={16} /> {pdfBusy ? 'Gerando PDF...' : 'Baixar PDF'}</button>
+          <button type="button" className="secondary" onClick={downloadPdf} disabled={!data || pdfBusy}><Download size={16} /> {pdfBusy ? 'Gerando PDF...' : 'Baixar PDF'}</button>
         </div>
       </div>
       {message && <p className="company-share-message" role="status">{message}</p>}

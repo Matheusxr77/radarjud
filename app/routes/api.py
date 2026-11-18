@@ -7,14 +7,16 @@ import logging
 import threading
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, Response, request, jsonify, current_app
 from sqlalchemy import text
 
 from app.extensions import db
 from app.models.company_search import CompanySearch, get_utc_now
 from app.models.process_record import ProcessRecord
 from app.services.orchestrator import CNJMetadataOrchestrator
+from app.services.pdf_report import generate_company_report_pdf
 from app.services.economic_service import (
     EconomicStandingService,
     aggregate_group_capital,
@@ -1192,3 +1194,298 @@ def get_search_detail(search_id: int):
     except Exception as exc:
         logger.error("Erro ao obter detalhes da pesquisa ID %d: %s", search_id, exc)
         return jsonify({"error": "Registro não encontrado."}), 404
+
+
+# =============================================================================
+# EXPORTAÇÃO DE RELATÓRIO EXECUTIVO EM PDF (v2.0 RiskTech + Solvência)
+# Suporta:
+#   - GET  /api/v1/history/<int:search_id>/summary.pdf
+#   - GET/POST /api/v1/report/pdf  (e /api/v1/export/pdf)
+#   - GET  /api/v1/report/pdf/<path:company_name> (e /api/v1/export/pdf/<path:company_name>)
+#   - Aliases diretos /api/report/pdf, /api/export/pdf registrados no app factory
+# =============================================================================
+def _strip_visual_company_suffixes(text: str) -> str:
+    """Remove sufixos visuais como '(GRUPO CONSOLIDADO / FILIAIS)' para localizar a chave real."""
+    cleaned = re.sub(r"\(.*?\)", "", str(text or "")).strip()
+    for kw in ("GRUPO CONSOLIDADO", "FILIAIS", "MATRIZ / FILIAIS"):
+        cleaned = re.sub(rf"\b{re.escape(kw)}\b", "", cleaned, flags=re.IGNORECASE).strip()
+    return re.sub(r"\s+", " ", cleaned).strip(" -/")
+
+
+def _search_record_to_pdf_payload(search: CompanySearch) -> dict:
+    """Converte um registro CompanySearch do banco no payload completo para geração do PDF."""
+    result = search.to_dict()
+    result["empresa"] = search.company_name
+    result["total_processos"] = search.total_processes or 0
+    result["desfechos_sentencas"] = search.outcomes_summary or {}
+    result["ranking_motivos"] = search.ranking_motivos or []
+    result["ranking_motivos_condenacao"] = search.ranking_motivos_condenacao or []
+    result["plus_previsao_condenacao"] = search.predictions_summary or []
+    result["score_risco_terceirizacao"] = search.overall_risk_score or 0.0
+    result["overall_risk_score"] = search.overall_risk_score or 0.0
+    if isinstance(search.economic_standing, dict):
+        result["idoneidade_economica"] = search.economic_standing
+        if search.economic_standing.get("indice_exposicao_financeira") is not None:
+            result["indice_exposicao_financeira"] = search.economic_standing["indice_exposicao_financeira"]
+    result["parecer_agente_adk"] = result.get("ai_analysis") or {}
+    return result
+
+
+def _find_company_payload_for_pdf(term: str) -> Optional[dict]:
+    """
+    Procura os dados consolidados da empresa primeiro no L0_MEMORY_CACHE (SEARCH_CACHE)
+    e depois no banco (CompanySearch), limpando sufixos visuais e suportando CNPJs com barra.
+    """
+    raw = str(term or "").strip()
+    if not raw:
+        return None
+
+    clean_no_parens = _strip_visual_company_suffixes(raw)
+    digits = re.sub(r"\D", "", raw)
+    cnpj_digits = digits if len(digits) == 14 else ""
+    sanitized = sanitize_company_name(clean_no_parens or raw).upper()
+    brand = extract_brand_search_term(clean_no_parens or raw).upper()
+
+    targets = {
+        t.upper()
+        for t in (raw, clean_no_parens, sanitized, brand, cnpj_digits)
+        if t and len(t.strip()) >= 2
+    }
+
+    # 1. Busca no L0_MEMORY_CACHE (SEARCH_CACHE)
+    for cache_key, (_ts, cached_data) in list(SEARCH_CACHE.items()):
+        if not isinstance(cached_data, dict):
+            continue
+        key_upper = str(cache_key).upper()
+        emp_upper = str(cached_data.get("empresa") or cached_data.get("company_name") or "").upper()
+        emp_clean = _strip_visual_company_suffixes(emp_upper).upper()
+        econ = cached_data.get("idoneidade_economica") or {}
+        strat = cached_data.get("search_strategy") or {}
+
+        cached_cnpjs = set()
+        for c_val in [
+            econ.get("cnpj_utilizado"),
+            econ.get("cnpj_triangulado"),
+            strat.get("target_cnpj"),
+            *(econ.get("cnpjs_consolidados") or []),
+        ]:
+            d_val = re.sub(r"\D", "", str(c_val or ""))
+            if len(d_val) == 14:
+                cached_cnpjs.add(d_val)
+
+        if cnpj_digits and (cnpj_digits in cached_cnpjs or cnpj_digits in key_upper):
+            return dict(cached_data)
+
+        if (
+            emp_upper in targets
+            or emp_clean in targets
+            or any(t in key_upper.split("::") for t in targets)
+            or (brand and emp_clean and brand == emp_clean)
+        ):
+            return dict(cached_data)
+
+    # 2. Busca no banco de dados (SQLite / PostgreSQL - CompanySearch)
+    try:
+        recent_rows = (
+            CompanySearch.query.order_by(CompanySearch.updated_at.desc()).limit(50).all()
+        )
+        for row in recent_rows:
+            row_name_up = str(row.company_name or "").upper()
+            row_norm_up = str(row.normalized_name or "").upper()
+            row_clean_up = _strip_visual_company_suffixes(row_name_up).upper()
+            row_econ = row.economic_standing if isinstance(row.economic_standing, dict) else {}
+
+            row_cnpjs = set()
+            for c_val in [
+                row_econ.get("cnpj_utilizado"),
+                row_econ.get("cnpj_triangulado"),
+                *(row_econ.get("cnpjs_consolidados") or []),
+            ]:
+                d_val = re.sub(r"\D", "", str(c_val or ""))
+                if len(d_val) == 14:
+                    row_cnpjs.add(d_val)
+
+            if cnpj_digits and (cnpj_digits in row_cnpjs or cnpj_digits in re.sub(r"\D", "", row_name_up)):
+                return _search_record_to_pdf_payload(row)
+
+            if (
+                row_name_up in targets
+                or row_norm_up in targets
+                or row_clean_up in targets
+                or (sanitized and sanitized == row_norm_up)
+                or (brand and brand == row_clean_up)
+            ):
+                return _search_record_to_pdf_payload(row)
+    except Exception as db_exc:
+        logger.debug("Consulta ao banco para PDF tratada silenciosamente: %s", db_exc)
+
+    return None
+
+
+def _build_pdf_response(payload: dict, filename_hint: str = "relatorio") -> Response:
+    """Renderiza os bytes do PDF executivo v2.0 e retorna a resposta HTTP application/pdf."""
+    pdf_bytes = generate_company_report_pdf(payload)
+    base_name = _strip_visual_company_suffixes(filename_hint) or "relatorio"
+    norm_ascii = unicodedata.normalize("NFKD", base_name).encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", norm_ascii).strip("-").lower()[:48] or "relatorio"
+    return Response(
+        pdf_bytes,
+        status=200,
+        mimetype="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="radarjus-{slug}.pdf"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+def handle_pdf_export_request(
+    search_id: Optional[int] = None,
+    company_name: Optional[str] = None,
+):
+    """
+    Manipulador unificado de exportação de PDF:
+    1. Aceita POST com o objeto de resultado já carregado na tela (nunca dá 404).
+    2. Aceita search_id (via path /history/<id>/summary.pdf ou query ?search_id=).
+    3. Aceita nome/CNPJ via query string (?empresa=, ?q=, ?company_name=) ou <path:company_name> (suportando '/').
+    4. Busca em L0_MEMORY_CACHE -> banco CompanySearch -> geração sob demanda para empresa/CNPJ válido.
+    """
+    body = request.get_json(silent=True) if request.method == "POST" else None
+    if not isinstance(body, dict):
+        body = {}
+
+    # 1. Payload já carregado na sessão do Front-end (via POST)
+    live_name = body.get("empresa") or body.get("company_name") or body.get("name")
+    has_live_metrics = any(
+        k in body and body.get(k) is not None
+        for k in (
+            "idoneidade_economica",
+            "idoneidadeEconomica",
+            "desfechos_sentencas",
+            "outcomes",
+            "outcomes_summary",
+            "total_processos",
+            "total_processes",
+            "total",
+            "ai_analysis",
+            "aiAnalysis",
+            "ranking_motivos",
+            "reasons",
+        )
+    )
+    if live_name and has_live_metrics:
+        payload = dict(body)
+        # Se houver search_id e faltar idoneidade ou IA, enriquece com o registro salvo
+        body_sid = body.get("search_id") or body.get("searchId") or body.get("id")
+        if body_sid and (not payload.get("idoneidade_economica") and not payload.get("idoneidadeEconomica")):
+            try:
+                saved = db.session.get(CompanySearch, int(body_sid))
+                if saved and isinstance(saved.economic_standing, dict):
+                    payload["idoneidade_economica"] = saved.economic_standing
+            except Exception:
+                pass
+        return _build_pdf_response(payload, filename_hint=str(live_name))
+
+    # 2. Busca por search_id (rota /history/<id>/summary.pdf ou ?search_id=)
+    resolved_sid = search_id
+    if resolved_sid is None:
+        raw_sid = request.args.get("search_id") or body.get("search_id") or body.get("searchId")
+        if raw_sid is not None and str(raw_sid).isdigit():
+            resolved_sid = int(raw_sid)
+
+    if resolved_sid is not None:
+        try:
+            search = db.session.get(CompanySearch, int(resolved_sid))
+        except Exception:
+            search = None
+        if search:
+            payload = _search_record_to_pdf_payload(search)
+            return _build_pdf_response(payload, filename_hint=f"empresa-{search.id}")
+        # Se veio somente search_id e não existe no banco, verifica se veio nome de fallback
+        fallback_term = (
+            company_name
+            or request.args.get("empresa")
+            or request.args.get("q")
+            or request.args.get("company_name")
+            or live_name
+        )
+        if not fallback_term:
+            return jsonify({"error": "Consulta não encontrada para geração do PDF."}), 404
+
+    # 3. Busca por nome de empresa ou CNPJ (suporta barras via <path:company_name> ou query string)
+    term = (
+        company_name
+        or request.args.get("empresa")
+        or request.args.get("q")
+        or request.args.get("company_name")
+        or request.args.get("name")
+        or live_name
+        or ""
+    ).strip()
+
+    if not term:
+        return jsonify({
+            "error": "Informe 'empresa', 'q', 'search_id' ou envie os dados da análise via POST para gerar o PDF."
+        }), 400
+
+    payload = _find_company_payload_for_pdf(term)
+    if payload:
+        return _build_pdf_response(payload, filename_hint=term)
+
+    # 4. Fallback sob demanda: gera relatório executivo com estratégia + idoneidade econômica
+    try:
+        strategy = resolve_search_strategy(term)
+        display_title = strategy.get("display_title") or term
+        cnpj_target = strategy.get("target_cnpj")
+        econ_data = economic_service.evaluate_economic_standing(
+            company_name=display_title,
+            cnpj=cnpj_target,
+            company_processes=[],
+            p_condenacao_trabalhista=0.0,
+            search_strategy=strategy,
+        )
+    except Exception as exc:
+        logger.debug("Fallback econômico na geração direta de PDF: %s", exc)
+        display_title = term
+        strategy = {}
+        econ_data = {}
+
+    live_payload = {
+        "empresa": display_title,
+        "total_processos": 0,
+        "desfechos_sentencas": {"condenacoes": 0, "acordos": 0, "improcedentes": 0, "em_aberto": 0},
+        "ranking_motivos": [],
+        "ranking_motivos_condenacao": [],
+        "plus_previsao_condenacao": [],
+        "indice_exposicao_financeira": econ_data.get("indice_exposicao_financeira", 5.0),
+        "score_risco_terceirizacao": econ_data.get("indice_exposicao_financeira", 5.0),
+        "idoneidade_economica": econ_data,
+        "search_strategy": strategy,
+        "scan_status": "COMPLETED",
+    }
+    try:
+        live_payload["ai_analysis"] = orchestrator.ai_analyzer.analyze_company(live_payload)
+    except Exception:
+        live_payload["ai_analysis"] = {}
+
+    return _build_pdf_response(live_payload, filename_hint=display_title)
+
+
+@api_bp.route("/history/<int:search_id>/summary.pdf", methods=["GET"])
+def export_history_summary_pdf(search_id: int):
+    """Exporta o relatório executivo em PDF de uma pesquisa salva pelo ID."""
+    return handle_pdf_export_request(search_id=search_id)
+
+
+@api_bp.route("/report/pdf", methods=["GET", "POST"])
+@api_bp.route("/export/pdf", methods=["GET", "POST"])
+def export_report_pdf_query_or_post():
+    """Exporta o relatório executivo em PDF via query string (?empresa=... / ?q=...) ou POST com JSON da tela."""
+    return handle_pdf_export_request()
+
+
+@api_bp.route("/report/pdf/<path:company_name>", methods=["GET"])
+@api_bp.route("/export/pdf/<path:company_name>", methods=["GET"])
+def export_report_pdf_by_path(company_name: str):
+    """Exporta o relatório executivo em PDF por nome/CNPJ no path (suporta barras como CNPJ e GRUPO CONSOLIDADO / FILIAIS)."""
+    return handle_pdf_export_request(company_name=company_name)
