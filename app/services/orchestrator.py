@@ -3,7 +3,7 @@ import re
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Set
 
 import requests
 
