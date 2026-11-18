@@ -1045,8 +1045,7 @@ def search_companies_catalog():
                     "matriz": cnpj[8:12] == "0001",
                     "processos_encontrados": counts.get(cnpj[:8], 0),
                     "logo": logo,
-                    "logo_url": (logo.get("logo_url") or logo.get("google_favicon_url")
-                                 or logo.get("logo_primary_url")),
+                    "logo_url": logo.get("logo_url") if logo.get("is_verified_domain") else None,
                 })
         dbg["brasilapi"] = {"consultas": len(jobs), "matrizes": n_matrizes,
                             "sem_resposta": sem_resposta, "descartados_por_nome": descartados}

@@ -1,14 +1,35 @@
 import React, { useEffect, useState } from 'react';
 
+const KNOWN_VERIFIED_DOMAINS = new Set([
+  'bb.com.br', 'caixa.gov.br', 'petrobras.com.br', 'correios.com.br',
+  'embratel.com.br', 'picpay.com', 'itau.com.br', 'bradesco.com.br',
+  'santander.com.br', 'nubank.com.br', 'compesa.com.br', 'globo.com',
+  'ambev.com.br', 'magazineluiza.com.br', 'natura.com.br', 'vale.com'
+]);
+
+function isLogoVerified(logo) {
+  if (!logo) return false;
+  if (logo.is_verified_domain === true) return true;
+  if (logo.is_verified_domain === false || logo.is_synthetic_domain === true) return false;
+
+  // Compatibilidade com consultas salvas antes da flag is_verified_domain:
+  const dom = String(logo.domain || '').toLowerCase().replace(/^www\./, '');
+  if (KNOWN_VERIFIED_DOMAINS.has(dom)) return true;
+
+  const url = String(logo.logo_url || logo.google_favicon_url || '');
+  if (url.includes('google.com/s2/favicons') || url.includes('gstatic.com') || url.includes('unavatar.io')) {
+    return false;
+  }
+  return Boolean(url);
+}
+
 // Logo da empresa com cadeia de fallback: logo oficial verificado → favicon → iniciais.
 export function CompanyLogo({ logo, companyName }) {
   const [imgErrorStep, setImgErrorStep] = useState(0);
 
-  // Se o domínio for sintético/não verificado (ex: slugs derivados como av2engenharia.com.br),
-  // não tenta carregar via Google Favicons para evitar erro 404 no DevTools do navegador.
-  const isSynthetic = logo?.is_synthetic_domain === true || logo?.is_verified_domain === false;
+  const canLoad = isLogoVerified(logo);
 
-  const logoUrl = isSynthetic
+  const logoUrl = !canLoad
     ? null
     : (imgErrorStep === 0
       ? (logo?.logo_url || logo?.google_favicon_url)
