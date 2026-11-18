@@ -48,6 +48,11 @@ def create_app(config_name: str = None) -> Flask:
     def _api_pdf_by_history_id(search_id: int):
         return handle_pdf_export_request(search_id=search_id)
 
+    @app.route("/api/cnj-proxy", methods=["GET", "POST", "OPTIONS"])
+    def _api_cnj_proxy():
+        from app.routes.api import cnj_proxy
+        return cnj_proxy()
+
     # Rota raiz informativa
     @app.route("/", methods=["GET"])
     def index():

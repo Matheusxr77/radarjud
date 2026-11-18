@@ -1555,8 +1555,8 @@ def handle_pdf_export_request(
         "ranking_motivos": [],
         "ranking_motivos_condenacao": [],
         "plus_previsao_condenacao": [],
-        "indice_exposicao_financeira": econ_data.get("indice_exposicao_financeira", 5.0),
-        "score_risco_terceirizacao": econ_data.get("indice_exposicao_financeira", 5.0),
+        "indice_exposicao_financeira": econ_data.get("indice_exposicao_financeira", 0.0),
+        "score_risco_terceirizacao": econ_data.get("indice_exposicao_financeira", 0.0),
         "idoneidade_economica": econ_data,
         "search_strategy": strategy,
         "scan_status": "COMPLETED",
@@ -1587,3 +1587,31 @@ def export_report_pdf_query_or_post():
 def export_report_pdf_by_path(company_name: str):
     """Exporta o relatório executivo em PDF por nome/CNPJ no path (suporta barras como CNPJ e GRUPO CONSOLIDADO / FILIAIS)."""
     return handle_pdf_export_request(company_name=company_name)
+
+
+@api_bp.route("/cnj-proxy", methods=["GET", "POST", "OPTIONS"])
+def cnj_proxy():
+    """Proxy local e para desenvolvimento para contornar restrições de CORS e geoblocking."""
+    from flask import request as flask_req, Response
+    if flask_req.method == "OPTIONS":
+        resp = Response("", status=204)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, chave-api-dados, X-Target-Url"
+        return resp
+
+    target_url = flask_req.args.get("target") or flask_req.headers.get("X-Target-Url")
+    if not target_url:
+        return jsonify({"error": "Missing target URL"}), 400
+
+    try:
+        from app.utils.http_client import request_gov_br_with_fallback
+        method = flask_req.method
+        headers = {k: v for k, v in flask_req.headers.items() if k.lower() in ("authorization", "chave-api-dados", "content-type")}
+        json_body = flask_req.get_json(silent=True) if method in ("POST", "PUT", "PATCH") else None
+        upstream = request_gov_br_with_fallback(method, target_url, headers=headers, json_body=json_body, timeout=8.0)
+        resp = Response(upstream.content, status=upstream.status_code, content_type=upstream.headers.get("content-type", "application/json"))
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502

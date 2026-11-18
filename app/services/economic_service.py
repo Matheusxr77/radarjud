@@ -1406,22 +1406,26 @@ def compute_calibrated_exposure_and_solvency(
     # 1. Tratamento específico quando o Capital Social é 0 (ou ainda em consolidação cadastral)
     if total_capital_num <= 0:
         if total_processes == 0:
-            prob_insolvencia = 5.0
+            prob_insolvencia = 0.0
             solvency_damping_factor = 0.20
             risco_subsidiario = 0.0
-            calibrated_exposure_score = 5.0
+            calibrated_exposure_score = 0.0
             cenario_tipo = "CENARIO_A"
             cenario_badge = "Cenário A · Sem Passivo Identificado"
             cenario_titulo = "Cenário A: Idoneidade Econômica Preservada • Sem Registros Processuais"
             cenario_descricao = (
                 "Nenhum processo trabalhista ou condenação foi localizado nas bases públicas oficiais do Judiciário (CNJ). "
-                "Como não há litígios cadastrados, o risco de exposição ou redirecionamento subsidiário ao tomador de serviços é inexistente."
+                "Como não há litígios cadastrados, o risco de exposição ou redirecionamento subsidiário ao tomador de serviços é inexistente (0,0%)."
             )
         elif total_processes <= 5:
             prob_insolvencia = 20.0
             solvency_damping_factor = 0.50
-            calibrated_exposure_score = round(min(95.0, max(5.0, raw_conviction_prob_pct * solvency_damping_factor)), 1)
-            risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
+            if raw_conviction_prob_pct <= 0.0:
+                calibrated_exposure_score = 0.0
+                risco_subsidiario = 0.0
+            else:
+                calibrated_exposure_score = round(min(95.0, max(1.0, raw_conviction_prob_pct * solvency_damping_factor)), 1)
+                risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
             cenario_tipo = "CENARIO_A"
             cenario_badge = "Cenário A · Baixo Volume Processual"
             cenario_titulo = "Cenário A: Idoneidade Econômica • Volume Processual Reduzido"
@@ -1432,8 +1436,12 @@ def compute_calibrated_exposure_and_solvency(
         else:
             prob_insolvencia = 65.0
             solvency_damping_factor = 0.95
-            calibrated_exposure_score = round(min(95.0, max(5.0, raw_conviction_prob_pct * solvency_damping_factor)), 1)
-            risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
+            if raw_conviction_prob_pct <= 0.0:
+                calibrated_exposure_score = 0.0
+                risco_subsidiario = 0.0
+            else:
+                calibrated_exposure_score = round(min(95.0, max(1.0, raw_conviction_prob_pct * solvency_damping_factor)), 1)
+                risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
             cenario_tipo = "CENARIO_B"
             cenario_badge = "Cenário B · Capital Não Localizado"
             cenario_titulo = "Cenário B: Risco Subsidiário • Capital Social Não Localizado"
@@ -1482,12 +1490,15 @@ def compute_calibrated_exposure_and_solvency(
         solvency_damping_factor = 0.95
 
     # Score de Exposição Financeira Ajustado pelo Capital Social (Card 1 do Topo)
-    calibrated_exposure_score = round(
-        min(95.0, max(5.0, raw_conviction_prob_pct * solvency_damping_factor)), 1
-    )
-
-    # Risco de Exposição Subsidiária / Calote (Card inferior): P(Condenação Bruta) * P(Insolvência)
-    risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
+    if raw_conviction_prob_pct <= 0.0 or total_processes == 0:
+        calibrated_exposure_score = 0.0
+        risco_subsidiario = 0.0
+    else:
+        calibrated_exposure_score = round(
+            min(95.0, max(1.0, raw_conviction_prob_pct * solvency_damping_factor)), 1
+        )
+        # Risco de Exposição Subsidiária / Calote (Card inferior): P(Condenação Bruta) * P(Insolvência)
+        risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
 
     formatted_capital = f"R$ {total_capital_num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
