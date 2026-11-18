@@ -14,6 +14,7 @@ from app.utils.sanitizer import (
     is_cnpj,
     classify_search_mode,
 )
+from app.utils.http_client import request_gov_br_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -1502,7 +1503,13 @@ class EconomicStandingService:
 
         for ep in endpoints:
             try:
-                resp = self.session.get(ep, headers=headers, timeout=self.timeout)
+                resp = request_gov_br_with_fallback(
+                    method="GET",
+                    url=ep,
+                    headers=headers,
+                    timeout=self.timeout,
+                    session=self.session,
+                )
                 if resp.status_code == 200:
                     data = resp.json()
                     if isinstance(data, list) and len(data) > 0:

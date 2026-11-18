@@ -392,6 +392,7 @@ def run_agent_pipeline():
 
 @api_bp.route("/company-dashboard", methods=["POST"])
 @api_bp.route("/search-company", methods=["POST", "GET"])
+@api_bp.route("/search", methods=["POST", "GET"])
 def search_company():
     """
     Endpoint principal para pesquisa e diagnóstico de risco de fornecedores/terceiros.
@@ -401,11 +402,14 @@ def search_company():
     - Fast-Path síncrono (< 3s na primeira página).
     - Deep Scan disparado em background para complementar o histórico.
     - Curto-Circuito Nível 2: Se o hash de movimentos não mudou, preserva o parecer da IA.
+    - Suporte a client_prefetched_items para fallback invisível anti-geoblocking.
     """
+    client_prefetched_items = []
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
         company_input = data.get("company_name") or data.get("name")
         force_refresh = bool(data.get("force_refresh", False))
+        client_prefetched_items = data.get("client_prefetched_items") or []
     else:
         company_input = request.args.get("name") or request.args.get("company_name")
         force_refresh = request.args.get("force_refresh", "false").lower() in ("true", "1")
@@ -568,6 +572,7 @@ def search_company():
             search_strategy=search_strategy,
             fast_path=True,
             limit_processes=50,
+            client_prefetched_items=client_prefetched_items,
         )
 
         fast_results["empresa"] = display_title

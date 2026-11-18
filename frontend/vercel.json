@@ -1,0 +1,8 @@
+{
+  "regions": ["gru1"],
+  "rewrites": [
+    { "source": "/api/cnj-proxy", "destination": "/api/cnj-proxy.js" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
+}
+
