@@ -29,6 +29,14 @@ const OUTCOME_LABELS = {
 const CHART_COLORS = ['#245a81', '#674b3c', '#b79b85', '#8998a7'];
 const formatNumber = (value) => new Intl.NumberFormat('pt-BR').format(Number(value) || 0);
 const formatPercent = (value) => `${Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
+const formatProcessNumber = (raw) => {
+  if (!raw) return 'Não informado';
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.length === 20) {
+    return `${digits.slice(0, 7)}-${digits.slice(7, 9)}.${digits.slice(9, 13)}.${digits.slice(13, 14)}.${digits.slice(14, 16)}.${digits.slice(16, 20)}`;
+  }
+  return String(raw);
+};
 const formatDate = (value) => {
   if (!value) return 'Não disponível';
   const parsed = new Date(value);
@@ -453,8 +461,8 @@ function Overview({ data, navigate, catalogTerm }) {
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px' }}>
-                <div className="econ-badge" style={{ gridColumn: 'span 2' }}>
+              <div className="econ-grid">
+                <div className="econ-badge econ-capital">
                   <small style={{ color: '#245a81', fontWeight: 600 }}>
                     {data?.isBroadBrand || (econ?.unidades_identificadas > 1)
                       ? 'Capital Social Consolidado (Matriz + Filiais):'
@@ -746,12 +754,12 @@ function Processes({ data }) {
                 {list.map((process, index) => (
                   <tr key={process.id || process.numero_processo || index}>
                     <td data-label="Processo" className="mono full-width">
-                      {process.numero_processo || process.process_number || 'Não informado'}
-                      {(process.is_tst_recurso || process.tribunal === 'tst' || String(process.grau || '').includes('TST')) && (
-                        <span style={{ marginLeft: '8px' }}>
+                      <div className="process-cell-content">
+                        <span className="process-number-text">{formatProcessNumber(process.numero_processo || process.process_number)}</span>
+                        {(process.is_tst_recurso || process.tribunal === 'tst' || String(process.grau || '').includes('TST')) && (
                           <Tag type="purple">Instância Superior TST</Tag>
-                        </span>
-                      )}
+                        )}
+                      </div>
                     </td>
                     <td data-label="Assunto Principal" className="full-width">
                       <b>{Array.isArray(process.subjects) ? process.subjects.join(', ') : process.primary_subject || 'Não informado'}</b>
@@ -1287,9 +1295,13 @@ export default function App() {
         <header className="topbar">
           <div className="topbar-left">
             <button className="menu-button" onClick={() => setMobileOpen(true)} aria-label="Abrir menu"><Menu size={23} /></button>
-            <span className="breadcrumb">RadarJus <ChevronRight size={14} /> <b>{PAGE_LABELS[page]}</b></span>
+            <span className="breadcrumb">
+              <span className="breadcrumb-brand">RadarJus</span>
+              <ChevronRight size={14} className="breadcrumb-sep" />
+              <b>{PAGE_LABELS[page]}</b>
+            </span>
           </div>
-          <div className="region"><span className="region-dot" /> CNJ DataJud · Comunica PJe</div>
+          <div className="region"><span className="region-dot" /><span className="region-text"> CNJ DataJud · Comunica PJe</span></div>
         </header>
         <main className="content">
           {page === 'search' && <SearchPage onSearch={submitSearch} query={query} setQuery={setQuery} busy={busy} error={error} navigate={navigate} result={data} />}

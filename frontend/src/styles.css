@@ -130,22 +130,78 @@
   }
 }
 
-/* Otimização Mobile Topbar e Botões */
+/* Otimização Mobile Topbar, Cartões e Estrutura Geral */
+.econ-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+}
+.econ-capital {
+  grid-column: span 2;
+}
+.process-cell-content {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+.process-number-text {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: #245a81;
+  word-break: break-all;
+}
+
 @media (max-width: 620px) {
+  .econ-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .econ-capital {
+    grid-column: auto !important;
+  }
+  .content {
+    padding: 20px 12px 36px !important;
+  }
+  .panel {
+    padding: 14px 12px !important;
+  }
+  .company-share {
+    padding: 12px !important;
+  }
+  .section-intro h1 {
+    font-size: 22px !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+  }
+  .section-intro p {
+    font-size: 13px !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+  }
   .topbar {
-    padding: 0 14px !important;
+    padding: 0 12px !important;
+    gap: 6px !important;
+    height: 60px !important;
+  }
+  .topbar-left {
     gap: 8px !important;
+    min-width: 0 !important;
+    flex: 1 !important;
+  }
+  .breadcrumb-brand, .breadcrumb-sep {
+    display: none !important;
   }
   .breadcrumb {
-    font-size: 11px !important;
-    max-width: 130px !important;
+    font-size: 13px !important;
+    white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
-    white-space: nowrap !important;
   }
   .region {
     font-size: 10px !important;
-    padding: 6px 10px !important;
+    padding: 5px 8px !important;
     white-space: nowrap !important;
     flex-shrink: 0 !important;
   }
@@ -154,7 +210,17 @@
   }
   .company-share-buttons button {
     flex: 1 !important;
-    min-width: 120px !important;
+    min-width: 110px !important;
     justify-content: center !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .region-text {
+    font-size: 0 !important;
+  }
+  .region-text::before {
+    content: "DataJud · PJe" !important;
+    font-size: 10px !important;
   }
 }

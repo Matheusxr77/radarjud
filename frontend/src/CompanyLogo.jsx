@@ -1,15 +1,22 @@
 import React, { useEffect, useState } from 'react';
 
-// Logo da empresa com cadeia de fallback: logo oficial → favicon → logo secundária → iniciais.
+// Logo da empresa com cadeia de fallback: logo oficial verificado → favicon → iniciais.
 export function CompanyLogo({ logo, companyName }) {
   const [imgErrorStep, setImgErrorStep] = useState(0);
-  const logoUrl = imgErrorStep === 0
-    ? (logo?.logo_url || logo?.google_favicon_url || logo?.logo_primary_url)
-    : (imgErrorStep === 1 ? (logo?.logo_secondary_url || logo?.google_favicon_url) : null);
+
+  // Se o domínio for sintético/não verificado (ex: slugs derivados como av2engenharia.com.br),
+  // não tenta carregar via Google Favicons para evitar erro 404 no DevTools do navegador.
+  const isSynthetic = logo?.is_synthetic_domain === true || logo?.is_verified_domain === false;
+
+  const logoUrl = isSynthetic
+    ? null
+    : (imgErrorStep === 0
+      ? (logo?.logo_url || logo?.google_favicon_url)
+      : (imgErrorStep === 1 ? logo?.logo_secondary_url : null));
 
   useEffect(() => {
     setImgErrorStep(0);
-  }, [companyName, logo?.logo_url, logo?.google_favicon_url, logo?.logo_primary_url]);
+  }, [companyName, logo?.logo_url, logo?.google_favicon_url, logo?.is_synthetic_domain]);
 
   if (logoUrl) {
     return (

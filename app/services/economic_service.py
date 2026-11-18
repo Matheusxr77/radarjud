@@ -279,18 +279,22 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
     norm_name = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", normalize_ascii(clean_name))).strip()
 
     domain = None
+    domain_is_verified = False
     # 1. Domínios especiais mapeados
     if norm_name in SPECIAL_DOMAINS:
         domain = SPECIAL_DOMAINS[norm_name]
+        domain_is_verified = True
     else:
         for k, v in SPECIAL_DOMAINS.items():
             if k == norm_name or (len(k) >= 3 and (norm_name.startswith(k + " ") or norm_name == k or (len(k) >= 4 and k in norm_name))):
                 domain = v
+                domain_is_verified = True
                 break
         if not domain and len(norm_name) >= 4:
             matches = difflib.get_close_matches(norm_name, list(SPECIAL_DOMAINS.keys()), n=1, cutoff=0.75)
             if matches:
                 domain = SPECIAL_DOMAINS[matches[0]]
+                domain_is_verified = True
 
     # 2. Domínio do e-mail cadastral da Receita Federal
     if not domain and email_rfb and "@" in email_rfb:
@@ -301,6 +305,7 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
         ]
         if not any(g in email_dom for g in generic_hosts) and "." in email_dom:
             domain = email_dom
+            domain_is_verified = True
 
     # 3. Clearbit Autocomplete API (busca em tempo real para qualquer empresa)
     if not domain:
@@ -315,6 +320,7 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
                 data = resp.json()
                 if isinstance(data, list) and data and isinstance(data[0], dict) and data[0].get("domain"):
                     domain = data[0]["domain"].strip().lower()
+                    domain_is_verified = True
         except Exception:
             pass
 
@@ -324,6 +330,7 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
         slug_ascii = normalize_ascii(slug)
         clean_slug = re.sub(r"[^\w]", "", slug_ascii).lower()
         domain = f"{clean_slug}.com.br" if clean_slug else "empresa.com.br"
+        domain_is_verified = False
 
     initials = extract_initials(clean_name)
     primary_url = f"https://www.google.com/s2/favicons?domain=www.{domain}&sz=128"
@@ -332,11 +339,13 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
     return {
         "brand": brand_name,
         "domain": domain,
+        "is_verified_domain": domain_is_verified,
+        "is_synthetic_domain": not domain_is_verified,
         "logo_primary_url": primary_url,
         "logo_secondary_url": secondary_url,
         "logo_favicon_url": primary_url,
-        "logo_url": primary_url,
-        "google_favicon_url": primary_url,
+        "logo_url": primary_url if domain_is_verified else None,
+        "google_favicon_url": primary_url if domain_is_verified else None,
         "initials": initials,
         "fallback_initials": initials,
     }
