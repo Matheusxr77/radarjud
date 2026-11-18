@@ -67,3 +67,160 @@
   .catalog-row.branch{padding:14px 16px}
   .branch-icon{width:auto}
 }
+
+/* Responsividade de Tabelas sem Scroll Horizontal (Card View Profissional) */
+@media (max-width: 768px) {
+  .table-scroll {
+    overflow-x: visible !important;
+  }
+  table.responsive-table {
+    min-width: 0 !important;
+    width: 100% !important;
+    display: block !important;
+  }
+  table.responsive-table thead {
+    display: none !important;
+  }
+  table.responsive-table tbody {
+    display: grid !important;
+    gap: 12px !important;
+    width: 100% !important;
+  }
+  table.responsive-table tbody tr {
+    display: flex !important;
+    flex-direction: column !important;
+    background: #ffffff !important;
+    border: 1px solid #e1e7ec !important;
+    border-radius: 12px !important;
+    padding: 14px 16px !important;
+    box-shadow: 0 1px 4px rgba(20, 35, 53, 0.04) !important;
+    gap: 8px !important;
+  }
+  table.responsive-table tbody td {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    padding: 6px 0 !important;
+    border-bottom: 1px dashed #edf1f4 !important;
+    font-size: 13px !important;
+    text-align: right !important;
+    word-break: break-word !important;
+  }
+  table.responsive-table tbody td:last-child {
+    border-bottom: none !important;
+  }
+  table.responsive-table tbody td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: #68798a;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    text-align: left;
+    margin-right: 12px;
+    flex-shrink: 0;
+  }
+  table.responsive-table tbody td.full-width {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    text-align: left !important;
+  }
+  table.responsive-table tbody td.full-width::before {
+    margin-bottom: 4px !important;
+  }
+}
+
+/* Otimização Mobile Topbar, Cartões e Estrutura Geral */
+.econ-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+}
+.econ-capital {
+  grid-column: span 2;
+}
+.process-cell-content {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+.process-number-text {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: #245a81;
+  word-break: break-all;
+}
+
+@media (max-width: 620px) {
+  .econ-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .econ-capital {
+    grid-column: auto !important;
+  }
+  .content {
+    padding: 20px 12px 36px !important;
+  }
+  .panel {
+    padding: 14px 12px !important;
+  }
+  .company-share {
+    padding: 12px !important;
+  }
+  .section-intro h1 {
+    font-size: 22px !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+  }
+  .section-intro p {
+    font-size: 13px !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+  }
+  .topbar {
+    padding: 0 12px !important;
+    gap: 6px !important;
+    height: 60px !important;
+  }
+  .topbar-left {
+    gap: 8px !important;
+    min-width: 0 !important;
+    flex: 1 !important;
+  }
+  .breadcrumb-brand, .breadcrumb-sep {
+    display: none !important;
+  }
+  .breadcrumb {
+    font-size: 13px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  .region {
+    font-size: 10px !important;
+    padding: 5px 8px !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+  }
+  .company-share-buttons {
+    width: 100% !important;
+  }
+  .company-share-buttons button {
+    flex: 1 !important;
+    min-width: 110px !important;
+    justify-content: center !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .region-text {
+    font-size: 0 !important;
+  }
+  .region-text::before {
+    content: "DataJud · PJe" !important;
+    font-size: 10px !important;
+  }
+}

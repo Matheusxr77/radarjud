@@ -1,15 +1,43 @@
 import React, { useEffect, useState } from 'react';
 
-// Logo da empresa com cadeia de fallback: logo oficial → favicon → logo secundária → iniciais.
+const KNOWN_VERIFIED_DOMAINS = new Set([
+  'bb.com.br', 'caixa.gov.br', 'petrobras.com.br', 'correios.com.br',
+  'embratel.com.br', 'picpay.com', 'itau.com.br', 'bradesco.com.br',
+  'santander.com.br', 'nubank.com.br', 'compesa.com.br', 'globo.com',
+  'ambev.com.br', 'magazineluiza.com.br', 'natura.com.br', 'vale.com'
+]);
+
+function isLogoVerified(logo) {
+  if (!logo) return false;
+  if (logo.is_verified_domain === true) return true;
+  if (logo.is_verified_domain === false || logo.is_synthetic_domain === true) return false;
+
+  // Compatibilidade com consultas salvas antes da flag is_verified_domain:
+  const dom = String(logo.domain || '').toLowerCase().replace(/^www\./, '');
+  if (KNOWN_VERIFIED_DOMAINS.has(dom)) return true;
+
+  const url = String(logo.logo_url || logo.google_favicon_url || '');
+  if (url.includes('google.com/s2/favicons') || url.includes('gstatic.com') || url.includes('unavatar.io')) {
+    return false;
+  }
+  return Boolean(url);
+}
+
+// Logo da empresa com cadeia de fallback: logo oficial verificado → favicon → iniciais.
 export function CompanyLogo({ logo, companyName }) {
   const [imgErrorStep, setImgErrorStep] = useState(0);
-  const logoUrl = imgErrorStep === 0
-    ? (logo?.logo_url || logo?.google_favicon_url || logo?.logo_primary_url)
-    : (imgErrorStep === 1 ? (logo?.logo_secondary_url || logo?.google_favicon_url) : null);
+
+  const canLoad = isLogoVerified(logo);
+
+  const logoUrl = !canLoad
+    ? null
+    : (imgErrorStep === 0
+      ? (logo?.logo_url || logo?.google_favicon_url)
+      : (imgErrorStep === 1 ? logo?.logo_secondary_url : null));
 
   useEffect(() => {
     setImgErrorStep(0);
-  }, [companyName, logo?.logo_url, logo?.google_favicon_url, logo?.logo_primary_url]);
+  }, [companyName, logo?.logo_url, logo?.google_favicon_url, logo?.is_synthetic_domain]);
 
   if (logoUrl) {
     return (

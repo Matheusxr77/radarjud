@@ -117,8 +117,32 @@ class CompanySearch(db.Model):
             "taxa_historica_condenacao_pct": taxa_cond_empirica,
             "score_risco_terceirizacao": self.overall_risk_score,
             "idoneidade_economica": econ_data,
-            "logo": econ_data.get("logo", {}) if isinstance(econ_data, dict) else {},
+            "logo": self._sanitize_logo_for_export(econ_data.get("logo", {}) if isinstance(econ_data, dict) else {}),
             "ai_analysis": self.ai_analysis or {},
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+    @staticmethod
+    def _sanitize_logo_for_export(logo_obj):
+        if not isinstance(logo_obj, dict) or not logo_obj:
+            return {}
+        if logo_obj.get("is_verified_domain") is False or logo_obj.get("is_synthetic_domain") is True:
+            return {
+                **logo_obj,
+                "logo_url": None,
+                "google_favicon_url": None,
+                "is_verified_domain": False,
+                "is_synthetic_domain": True,
+            }
+        from app.services.economic_service import SPECIAL_DOMAINS
+        dom = str(logo_obj.get("domain", "")).lower().replace("www.", "")
+        if dom and dom not in SPECIAL_DOMAINS.values() and not logo_obj.get("is_verified_domain"):
+            return {
+                **logo_obj,
+                "logo_url": None,
+                "google_favicon_url": None,
+                "is_verified_domain": False,
+                "is_synthetic_domain": True,
+            }
+        return logo_obj

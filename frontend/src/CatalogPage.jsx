@@ -234,6 +234,11 @@ export default function CatalogPage({
                 {catalog.suggestion}
               </button>
             )}
+            <div style={{ marginTop: '1.25rem' }}>
+              <button className="primary" onClick={onAnalyzeGroup} disabled={disabled}>
+                {analyzing === 'GROUP' ? <><RefreshCw size={16} className="spin" /> Consultando</> : <>Analisar “{catalog.term}” diretamente <ArrowRight size={16} /></>}
+              </button>
+            </div>
           </div>
         </section>
       )}

@@ -594,22 +594,25 @@ class CNJMetadataOrchestrator:
         if search_strategy and search_strategy.get("comunica_query_term"):
             query_term = search_strategy["comunica_query_term"]
 
-        if fast_path and query_term:
-            processes_map = self.searcher.fetch_single_comunica_page(query_term, page_num=1, timeout=5.0) or {}
-        else:
-            search_input = query_term or company_name
-            processes_map = self._fetch_comunica_pje(search_input, max_pages=max_pages, fast_path=fast_path) or {}
-        
-        discovered_entities = getattr(self, "last_discovered_entities", [])
-
-        if not processes_map and client_prefetched_items:
-            logger.info("Ativando fallback silencioso Browser Edge Fetch com %d itens do cliente", len(client_prefetched_items))
+        processes_map: Dict[str, Any] = {}
+        if client_prefetched_items:
+            logger.info("Ativando prefetch silencioso imediato Browser Edge Fetch com %d itens do cliente", len(client_prefetched_items))
             prefetched_map: Dict[str, Any] = {}
             disc_entities: Set[str] = set()
             self.searcher._parse_comunica_items(client_prefetched_items, prefetched_map, disc_entities)
             if prefetched_map:
                 processes_map = prefetched_map
                 discovered_entities = list(disc_entities)
+
+        if not processes_map:
+            if fast_path and query_term:
+                processes_map = self.searcher.fetch_single_comunica_page(query_term, page_num=1, timeout=5.0) or {}
+            else:
+                search_input = query_term or company_name
+                processes_map = self._fetch_comunica_pje(search_input, max_pages=max_pages, fast_path=fast_path) or {}
+            
+            if not discovered_entities:
+                discovered_entities = getattr(self, "last_discovered_entities", [])
 
         if not processes_map:
             empty_res = self._calculate_metrics(company_name, [], scan_status="COMPLETED")

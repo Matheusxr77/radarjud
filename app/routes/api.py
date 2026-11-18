@@ -759,19 +759,78 @@ def _cat_matrix(root8: str) -> str:
 
 
 def _cat_brasilapi(cnpj: str):
-    """Usa o fetcher do projeto; se ele devolver outro formato, cai na BrasilAPI direta."""
+    """Obtém dados cadastrais do CNPJ com camadas resilientes (Diretório Oficial, DB, Cache e APIs)."""
+    clean_cnpj = re.sub(r"\D", "", str(cnpj or ""))
+    if not _cat_valid(clean_cnpj):
+        return None
+
+    # 1. Diretório Oficial Corporativo de Fallback (alta velocidade, thread-safe, sem I/O)
     try:
-        data = fetch_cnpj_brasilapi(cnpj)
+        from app.services.economic_service import OFFICIAL_CORPORATE_METADATA
+        if clean_cnpj in OFFICIAL_CORPORATE_METADATA:
+            return dict(OFFICIAL_CORPORATE_METADATA[clean_cnpj])
+    except Exception as exc:
+        logger.debug("Catálogo: OFFICIAL_CORPORATE_METADATA falhou (%s): %s", clean_cnpj, exc)
+
+    # 2. Tenta obter do banco local CompanyRegistry
+    try:
+        from app.models.CompanyRegistry import CompanyRegistry
+        reg = CompanyRegistry.query.filter_by(cnpj=clean_cnpj).first()
+        if reg and reg.razao_social:
+            return {
+                "cnpj": clean_cnpj,
+                "razao_social": reg.razao_social,
+                "nome_fantasia": reg.nome_fantasia or "",
+                "descricao_situacao_cadastral": reg.situacao_cadastral or "ATIVA",
+                "capital_social": float(reg.capital_social or 0.0),
+                "municipio": reg.municipio or "",
+                "uf": reg.uf or "",
+                "identificador_matriz_filial": 1 if (reg.matriz_filial == "1" or clean_cnpj[8:12] == "0001") else 2,
+            }
+    except Exception as exc:
+        logger.debug("Catálogo: consulta a CompanyRegistry falhou (%s): %s", clean_cnpj, exc)
+
+    # 3. Tenta fetch_accurate_cnpj_data_cached (Round-Robin entre BrasilAPI, CNPJ.ws, MinhaReceita, ReceitaWS)
+    try:
+        from app.services.economic_service import fetch_accurate_cnpj_data_cached
+        data = fetch_accurate_cnpj_data_cached(clean_cnpj, timeout=4.0)
+        if isinstance(data, dict) and data.get("razao_social"):
+            return {
+                "cnpj": clean_cnpj,
+                "razao_social": data.get("razao_social"),
+                "nome_fantasia": data.get("nome_fantasia") or "",
+                "descricao_situacao_cadastral": data.get("situacao") or data.get("descricao_situacao_cadastral") or "ATIVA",
+                "capital_social": float(data.get("capital_social") or 0.0),
+                "municipio": data.get("municipio") or "",
+                "uf": data.get("uf") or "",
+                "identificador_matriz_filial": 1 if clean_cnpj[8:12] == "0001" else 2,
+            }
+    except Exception as exc:
+        logger.debug("Catálogo: fetch_accurate_cnpj_data_cached falhou (%s): %s", clean_cnpj, exc)
+
+    # 4. Tenta fetch_cnpj_brasilapi
+    try:
+        data = fetch_cnpj_brasilapi(clean_cnpj)
         if isinstance(data, dict) and data.get("razao_social") and "descricao_situacao_cadastral" in data:
             return data
     except Exception as exc:
-        logger.debug("Catálogo: fetch_cnpj_brasilapi falhou (%s): %s", cnpj, exc)
+        logger.debug("Catálogo: fetch_cnpj_brasilapi falhou (%s): %s", clean_cnpj, exc)
+
+    # 5. Tenta requisição direta BrasilAPI
     try:
-        r = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}", timeout=12)
-        return r.json() if r.ok else None
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
+        r = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{clean_cnpj}", headers=headers, timeout=5)
+        if r.ok:
+            data = r.json()
+            if isinstance(data, dict) and data.get("razao_social"):
+                return data
     except Exception as exc:
-        logger.debug("Catálogo: BrasilAPI direta falhou (%s): %s", cnpj, exc)
-        return None
+        logger.debug("Catálogo: BrasilAPI direta falhou (%s): %s", clean_cnpj, exc)
+
+    return None
 
 
 def _cat_logo(data: dict, cnpj: str):
@@ -871,6 +930,40 @@ def search_companies_catalog():
             brand = strat.get("comunica_query_term") or q
             dbg["termo_pje"] = brand
 
+            # 1) Descoberta via Banco Local (CompanyRegistry)
+            try:
+                from app.models.CompanyRegistry import CompanyRegistry
+                from sqlalchemy import or_
+                db_matches = CompanyRegistry.query.filter(
+                    or_(
+                        CompanyRegistry.razao_social.ilike(f"%{q}%"),
+                        CompanyRegistry.nome_fantasia.ilike(f"%{q}%")
+                    )
+                ).all()
+                for comp in db_matches:
+                    d = re.sub(r"\D", "", comp.cnpj)
+                    if _cat_valid(d):
+                        counts.setdefault(d[:8], 0)
+                        seen.setdefault(d[:8], set()).add(d)
+                dbg["db_matches"] = len(db_matches)
+            except Exception as exc:
+                dbg["db_matches_erro"] = str(exc)
+
+            # 2) Descoberta via Diretório Oficial Corporativo (ex: BRADESCO, ITAU, etc.)
+            try:
+                from app.services.economic_service import OFFICIAL_CORPORATE_CNPJ_DIRECTORY
+                norm_q = _cat_norm(q).upper()
+                for brand_key, cnpjs in OFFICIAL_CORPORATE_CNPJ_DIRECTORY.items():
+                    norm_k = _cat_norm(brand_key).upper()
+                    if norm_k in norm_q or norm_q in norm_k or (len(norm_q) >= 4 and norm_q.split()[0] in norm_k):
+                        for c in cnpjs:
+                            d = re.sub(r"\D", "", c)
+                            if _cat_valid(d):
+                                counts.setdefault(d[:8], 0)
+                                seen.setdefault(d[:8], set()).add(d)
+            except Exception as exc:
+                dbg["directory_erro"] = str(exc)
+
             processes_map = {}
             try:
                 processes_map = orchestrator._fetch_comunica_pje(
@@ -881,7 +974,7 @@ def search_companies_catalog():
                 logger.warning("Catálogo: Comunica PJe falhou para '%s': %s", brand, exc)
             dbg["pje_processos"] = len(processes_map)
 
-            # 1) CNPJs nos textos das publicações (contados 1x por processo e por raiz)
+            # 3) CNPJs nos textos das publicações (contados 1x por processo e por raiz)
             for proc in processes_map.values():
                 here = {}
                 for txt in proc.get("publicacoes_texto", []) or []:
@@ -894,7 +987,7 @@ def search_companies_catalog():
                     seen.setdefault(root, set()).update(cnpjs)
             dbg["cnpjs_nos_textos"] = len(counts)
 
-            # 2) Descoberta já existente no projeto (grupo/marca)
+            # 4) Descoberta já existente no projeto (grupo/marca)
             try:
                 for ent in discover_company_cnpjs(q, brand, processes_map, search_strategy=strat) or []:
                     d = re.sub(r"\D", "", str(ent))
@@ -952,8 +1045,7 @@ def search_companies_catalog():
                     "matriz": cnpj[8:12] == "0001",
                     "processos_encontrados": counts.get(cnpj[:8], 0),
                     "logo": logo,
-                    "logo_url": (logo.get("logo_url") or logo.get("google_favicon_url")
-                                 or logo.get("logo_primary_url")),
+                    "logo_url": logo.get("logo_url") if logo.get("is_verified_domain") else None,
                 })
         dbg["brasilapi"] = {"consultas": len(jobs), "matrizes": n_matrizes,
                             "sem_resposta": sem_resposta, "descartados_por_nome": descartados}
@@ -967,7 +1059,7 @@ def search_companies_catalog():
             payload["debug"] = dbg
         if not items:
             logger.info("Catálogo sem resultados para '%s': %s", q, dbg)
-            return jsonify({**payload, "error": "NOT_FOUND"}), 404
+            return jsonify({**payload, "error": "NOT_FOUND"}), 200
         CATALOG_CACHE[key] = (time.time(), {k: v for k, v in payload.items() if k != "debug"})
         return jsonify(payload), 200
     except Exception as exc:
@@ -1462,8 +1554,8 @@ def handle_pdf_export_request(
         "ranking_motivos": [],
         "ranking_motivos_condenacao": [],
         "plus_previsao_condenacao": [],
-        "indice_exposicao_financeira": econ_data.get("indice_exposicao_financeira", 5.0),
-        "score_risco_terceirizacao": econ_data.get("indice_exposicao_financeira", 5.0),
+        "indice_exposicao_financeira": econ_data.get("indice_exposicao_financeira", 0.0),
+        "score_risco_terceirizacao": econ_data.get("indice_exposicao_financeira", 0.0),
         "idoneidade_economica": econ_data,
         "search_strategy": strategy,
         "scan_status": "COMPLETED",
@@ -1494,3 +1586,31 @@ def export_report_pdf_query_or_post():
 def export_report_pdf_by_path(company_name: str):
     """Exporta o relatório executivo em PDF por nome/CNPJ no path (suporta barras como CNPJ e GRUPO CONSOLIDADO / FILIAIS)."""
     return handle_pdf_export_request(company_name=company_name)
+
+
+@api_bp.route("/cnj-proxy", methods=["GET", "POST", "OPTIONS"])
+def cnj_proxy():
+    """Proxy local e para desenvolvimento para contornar restrições de CORS e geoblocking."""
+    from flask import request as flask_req, Response
+    if flask_req.method == "OPTIONS":
+        resp = Response("", status=204)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, chave-api-dados, X-Target-Url"
+        return resp
+
+    target_url = flask_req.args.get("target") or flask_req.headers.get("X-Target-Url")
+    if not target_url:
+        return jsonify({"error": "Missing target URL"}), 400
+
+    try:
+        from app.utils.http_client import request_gov_br_with_fallback
+        method = flask_req.method
+        headers = {k: v for k, v in flask_req.headers.items() if k.lower() in ("authorization", "chave-api-dados", "content-type")}
+        json_body = flask_req.get_json(silent=True) if method in ("POST", "PUT", "PATCH") else None
+        upstream = request_gov_br_with_fallback(method, target_url, headers=headers, json_body=json_body, timeout=8.0)
+        resp = Response(upstream.content, status=upstream.status_code, content_type=upstream.headers.get("content-type", "application/json"))
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502

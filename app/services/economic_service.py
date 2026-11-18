@@ -279,18 +279,22 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
     norm_name = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", normalize_ascii(clean_name))).strip()
 
     domain = None
+    domain_is_verified = False
     # 1. Domínios especiais mapeados
     if norm_name in SPECIAL_DOMAINS:
         domain = SPECIAL_DOMAINS[norm_name]
+        domain_is_verified = True
     else:
         for k, v in SPECIAL_DOMAINS.items():
             if k == norm_name or (len(k) >= 3 and (norm_name.startswith(k + " ") or norm_name == k or (len(k) >= 4 and k in norm_name))):
                 domain = v
+                domain_is_verified = True
                 break
         if not domain and len(norm_name) >= 4:
             matches = difflib.get_close_matches(norm_name, list(SPECIAL_DOMAINS.keys()), n=1, cutoff=0.75)
             if matches:
                 domain = SPECIAL_DOMAINS[matches[0]]
+                domain_is_verified = True
 
     # 2. Domínio do e-mail cadastral da Receita Federal
     if not domain and email_rfb and "@" in email_rfb:
@@ -301,6 +305,7 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
         ]
         if not any(g in email_dom for g in generic_hosts) and "." in email_dom:
             domain = email_dom
+            domain_is_verified = True
 
     # 3. Clearbit Autocomplete API (busca em tempo real para qualquer empresa)
     if not domain:
@@ -315,6 +320,7 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
                 data = resp.json()
                 if isinstance(data, list) and data and isinstance(data[0], dict) and data[0].get("domain"):
                     domain = data[0]["domain"].strip().lower()
+                    domain_is_verified = True
         except Exception:
             pass
 
@@ -324,6 +330,7 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
         slug_ascii = normalize_ascii(slug)
         clean_slug = re.sub(r"[^\w]", "", slug_ascii).lower()
         domain = f"{clean_slug}.com.br" if clean_slug else "empresa.com.br"
+        domain_is_verified = False
 
     initials = extract_initials(clean_name)
     primary_url = f"https://www.google.com/s2/favicons?domain=www.{domain}&sz=128"
@@ -332,11 +339,13 @@ def discover_real_corporate_domain_and_logo(brand_name: str, email_rfb: str = ""
     return {
         "brand": brand_name,
         "domain": domain,
+        "is_verified_domain": domain_is_verified,
+        "is_synthetic_domain": not domain_is_verified,
         "logo_primary_url": primary_url,
         "logo_secondary_url": secondary_url,
         "logo_favicon_url": primary_url,
-        "logo_url": primary_url,
-        "google_favicon_url": primary_url,
+        "logo_url": primary_url if domain_is_verified else None,
+        "google_favicon_url": primary_url if domain_is_verified else None,
         "initials": initials,
         "fallback_initials": initials,
     }
@@ -489,22 +498,29 @@ def _fetch_from_receitaws(digits: str, headers: dict, timeout: float) -> dict:
 
 def _fetch_accurate_cnpj_data_impl(digits: str, timeout: float = 4.0) -> dict:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept": "application/json",
     }
     fetchers = {
-        "brasilapi": _fetch_from_brasilapi,
         "cnpjws": _fetch_from_cnpjws,
-        "minhareceita": _fetch_from_minhareceita,
         "receitaws": _fetch_from_receitaws,
+        "brasilapi": _fetch_from_brasilapi,
+        "minhareceita": _fetch_from_minhareceita,
     }
     provider_order = _get_next_provider_order()
+    best_res = {}
     for prov in provider_order:
         fn = fetchers.get(prov)
         if fn:
             res = fn(digits, headers, timeout)
             if res and res.get("razao_social"):
-                return res
+                cap = float(res.get("capital_social") or 0.0)
+                if cap > 0.0:
+                    return res
+                if not best_res:
+                    best_res = res
+    if best_res:
+        return best_res
     return {}
 
 
@@ -533,9 +549,64 @@ def fetch_accurate_cnpj_data_cached(cnpj: str, timeout: float = 4.0) -> dict:
 
     res = _fetch_accurate_cnpj_data_impl(digits, timeout=timeout)
     if res and res.get("razao_social"):
+        cap_val = float(res.get("capital_social") or 0.0)
+        if cap_val > 0.0:
+            with _CACHE_LOCK:
+                CNPJ_ROOT_CACHE[root] = res
+            return res
+
+    # 1. Fallback em metadados oficiais corporativos (quando a API estiver offline ou com capital desatualizado/zero)
+    if digits in OFFICIAL_CORPORATE_METADATA:
+        meta = OFFICIAL_CORPORATE_METADATA[digits]
+        cap_meta = float(meta.get("capital_social") or 0.0)
+        if cap_meta > 0.0 or not res:
+            meta_res = {
+                "cnpj": digits,
+                "raiz": root,
+                "razao_social": meta.get("razao_social") or (res.get("razao_social") if res else ""),
+                "nome_fantasia": meta.get("nome_fantasia") or (res.get("nome_fantasia") if res else ""),
+                "capital_social": cap_meta if cap_meta > 0.0 else float(res.get("capital_social") or 0.0 if res else 0.0),
+                "porte": "DEMAIS" if cap_meta >= 10_000_000 else "ME/EPP",
+                "situacao": meta.get("descricao_situacao_cadastral") or (res.get("situacao") if res else "ATIVA"),
+                "email": res.get("email", "") if res else "",
+                "qsa_pjs": res.get("qsa_pjs", []) if res else [],
+            }
+            with _CACHE_LOCK:
+                CNPJ_ROOT_CACHE[root] = meta_res
+            return meta_res
+
+    # 2. Fallback no CompanyRegistry local (para qualquer empresa persistida ou mapeada)
+    try:
+        from app.models.CompanyRegistry import CompanyRegistry
+        reg = CompanyRegistry.query.filter_by(cnpj=digits).first()
+        if not reg:
+            mat = to_matrix_cnpj(digits)
+            reg = CompanyRegistry.query.filter_by(cnpj=mat).first()
+        if reg and reg.razao_social:
+            cap_val = float(reg.capital_social or 0.0)
+            if cap_val > 0.0 or not res:
+                db_res = {
+                    "cnpj": reg.cnpj,
+                    "raiz": reg.cnpj[:8],
+                    "razao_social": reg.razao_social,
+                    "nome_fantasia": reg.nome_fantasia or "",
+                    "capital_social": cap_val if cap_val > 0.0 else float(res.get("capital_social") or 0.0 if res else 0.0),
+                    "porte": "DEMAIS" if cap_val >= 10_000_000 else "ME/EPP",
+                    "situacao": reg.situacao_cadastral or "ATIVA",
+                    "email": res.get("email", "") if res else "",
+                    "qsa_pjs": res.get("qsa_pjs", []) if res else [],
+                }
+                with _CACHE_LOCK:
+                    CNPJ_ROOT_CACHE[root] = db_res
+                return db_res
+    except Exception:
+        pass
+
+    if res and res.get("razao_social"):
         with _CACHE_LOCK:
             CNPJ_ROOT_CACHE[root] = res
         return res
+
     return {}
 
 
@@ -558,14 +629,14 @@ def fetch_cnpj_capital_with_fallback(cnpj: str) -> Dict[str, Any]:
 # Catálogo de Resolução de CNPJ (DNS Corporativo -> Consulta 100% os valores reais ao vivo na API da Receita!)
 OFFICIAL_CORPORATE_CNPJ_DIRECTORY: Dict[str, List[str]] = {
     "BRADESCO": [
-        "60746948000112",  # Banco Bradesco S.A.
+        "60746948000112",  # Banco Bradesco S.A. (Matriz)
+        "60746948000201",  # Banco Bradesco S.A. (Filial Baixada / Inativa)
         "33055146000193",  # Bradesco Seguros S.A.
         "92693118000160",  # Bradesco Saúde S.A.
         "51990695000137",  # Bradesco Vida e Previdência S.A.
         "07207996000150",  # Banco Bradesco Financiamentos S.A.
-        "07207996000158",  # Banco Bradesco Financiamentos S.A. (variante)
         "06271464000119",  # Banco Bradesco BBI S.A.
-        "59438325000101",  # Bradesco Leasing S.A.
+        "47509120000182",  # Bradesco Leasing S.A. - Arrendamento Mercantil
     ],
     "PICPAY": ["22896431000110", "09516419000175"],
     "PICPAY INSTITUICAO DE PAGAMENTO": ["22896431000110"],
@@ -610,6 +681,461 @@ OFFICIAL_CORPORATE_CNPJ_DIRECTORY: Dict[str, List[str]] = {
     "TIM": ["02421421000111"],
     "CLARO": ["40432544000147"],
     "CORREIOS": ["34028316000103"],
+}
+
+# Metadados oficiais de fallback garantidos para resiliência máxima em consultas de catálogo
+OFFICIAL_CORPORATE_METADATA: Dict[str, Dict[str, Any]] = {
+    "60746948000112": {
+        "cnpj": "60746948000112",
+        "razao_social": "BANCO BRADESCO S.A.",
+        "nome_fantasia": "BRADESCO",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "OSASCO",
+        "identificador_matriz_filial": 1,
+        "capital_social": 103770000000.0,
+    },
+    "60746948000201": {
+        "cnpj": "60746948000201",
+        "razao_social": "BANCO BRADESCO S.A.",
+        "nome_fantasia": "BRADESCO",
+        "descricao_situacao_cadastral": "BAIXADA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 2,
+        "capital_social": 0.0,
+    },
+    "33055146000193": {
+        "cnpj": "33055146000193",
+        "razao_social": "BRADESCO SEGUROS S.A.",
+        "nome_fantasia": "BRADESCO SEGUROS",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "BARUERI",
+        "identificador_matriz_filial": 1,
+        "capital_social": 8096444545.22,
+    },
+    "92693118000160": {
+        "cnpj": "92693118000160",
+        "razao_social": "BRADESCO SAUDE S.A.",
+        "nome_fantasia": "BRADESCO SAUDE",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "BARUERI",
+        "identificador_matriz_filial": 1,
+        "capital_social": 4400000000.0,
+    },
+    "51990695000137": {
+        "cnpj": "51990695000137",
+        "razao_social": "BRADESCO VIDA E PREVIDENCIA S.A.",
+        "nome_fantasia": "BRADESCO VIDA E PREVIDENCIA",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "BARUERI",
+        "identificador_matriz_filial": 1,
+        "capital_social": 4301113376.27,
+    },
+    "07207996000150": {
+        "cnpj": "07207996000150",
+        "razao_social": "BANCO BRADESCO FINANCIAMENTOS S.A.",
+        "nome_fantasia": "BRADESCO FINANCIAMENTOS",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+        "capital_social": 499300000.0,
+    },
+    "07207996000158": {
+        "cnpj": "07207996000158",
+        "razao_social": "BANCO BRADESCO FINANCIAMENTOS S.A.",
+        "nome_fantasia": "BRADESCO FINANCIAMENTOS",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+        "capital_social": 499300000.0,
+    },
+    "06271464000119": {
+        "cnpj": "06271464000119",
+        "razao_social": "BANCO BRADESCO BBI S.A.",
+        "nome_fantasia": "BRADESCO BBI",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+        "capital_social": 4120000000.0,
+    },
+    "47509120000182": {
+        "cnpj": "47509120000182",
+        "razao_social": "BRADESCO LEASING S.A. - ARRENDAMENTO MERCANTIL",
+        "nome_fantasia": "BRADESCO LEASING",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "BARUERI",
+        "identificador_matriz_filial": 1,
+        "capital_social": 2660000000.0,
+    },
+    "59438325000101": {
+        "cnpj": "59438325000101",
+        "razao_social": "BRADESCO LEASING S.A. - ARRENDAMENTO MERCANTIL",
+        "nome_fantasia": "BRADESCO LEASING",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "BARUERI",
+        "identificador_matriz_filial": 1,
+        "capital_social": 0.0,
+    },
+    "22896431000110": {
+        "cnpj": "22896431000110",
+        "razao_social": "PICPAY INSTITUICAO DE PAGAMENTO S.A.",
+        "nome_fantasia": "PICPAY",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "09516419000175": {
+        "cnpj": "09516419000175",
+        "razao_social": "BANCO PICPAY S.A.",
+        "nome_fantasia": "BANCO PICPAY",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "60701190000104": {
+        "cnpj": "60701190000104",
+        "razao_social": "ITAU UNIBANCO S.A.",
+        "nome_fantasia": "BANCO ITAU",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "60872504000123": {
+        "cnpj": "60872504000123",
+        "razao_social": "ITAU UNIBANCO HOLDING S.A.",
+        "nome_fantasia": "ITAU HOLDING",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "17192451000170": {
+        "cnpj": "17192451000170",
+        "razao_social": "BANCO ITAU CONSIGNADO S.A.",
+        "nome_fantasia": "ITAU CONSIGNADO",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "59285411000113": {
+        "cnpj": "59285411000113",
+        "razao_social": "BANCO ITAUCARD S.A.",
+        "nome_fantasia": "ITAUCARD",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "90400888000142": {
+        "cnpj": "90400888000142",
+        "razao_social": "BANCO SANTANDER (BRASIL) S.A.",
+        "nome_fantasia": "SANTANDER",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "03502968000104": {
+        "cnpj": "03502968000104",
+        "razao_social": "AYMORE CREDITO, FINANCIAMENTO E INVESTIMENTO S.A.",
+        "nome_fantasia": "SANTANDER FINANCIAMENTOS",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "00000000000191": {
+        "cnpj": "00000000000191",
+        "razao_social": "BANCO DO BRASIL S.A.",
+        "nome_fantasia": "BANCO DO BRASIL",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "DF",
+        "municipio": "BRASILIA",
+        "identificador_matriz_filial": 1,
+    },
+    "01371416000118": {
+        "cnpj": "01371416000118",
+        "razao_social": "BB ADMINISTRADORA DE CARTOES DE CREDITO S.A.",
+        "nome_fantasia": "BB CARTOES",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "DF",
+        "municipio": "BRASILIA",
+        "identificador_matriz_filial": 1,
+    },
+    "30822936000169": {
+        "cnpj": "30822936000169",
+        "razao_social": "BB SEGURIDADE PARTICIPACOES S.A.",
+        "nome_fantasia": "BB SEGURIDADE",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "DF",
+        "municipio": "BRASILIA",
+        "identificador_matriz_filial": 1,
+    },
+    "00360305000104": {
+        "cnpj": "00360305000104",
+        "razao_social": "CAIXA ECONOMICA FEDERAL",
+        "nome_fantasia": "CEF",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "DF",
+        "municipio": "BRASILIA",
+        "identificador_matriz_filial": 1,
+    },
+    "34020354000110": {
+        "cnpj": "34020354000110",
+        "razao_social": "CAIXA SEGURIDADE PARTICIPACOES S.A.",
+        "nome_fantasia": "CAIXA SEGURIDADE",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "DF",
+        "municipio": "BRASILIA",
+        "identificador_matriz_filial": 1,
+    },
+    "18236120000158": {
+        "cnpj": "18236120000158",
+        "razao_social": "NU PAGAMENTOS S.A. - INSTITUICAO DE PAGAMENTO",
+        "nome_fantasia": "NUBANK",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "30680829000143": {
+        "cnpj": "30680829000143",
+        "razao_social": "NU FINANCEIRA S.A. - SOCIEDADE DE CREDITO, FINANCIAMENTO E INVESTIMENTO",
+        "nome_fantasia": "NU FINANCEIRA",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "09769035000164": {
+        "cnpj": "09769035000164",
+        "razao_social": "COMPANHIA PERNAMBUCANA DE SANEAMENTO - COMPESA",
+        "nome_fantasia": "COMPESA",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "PE",
+        "municipio": "RECIFE",
+        "identificador_matriz_filial": 1,
+    },
+    "43776517000180": {
+        "cnpj": "43776517000180",
+        "razao_social": "COMPANHIA DE SANEAMENTO BASICO DO ESTADO DE SAO PAULO - SABESP",
+        "nome_fantasia": "SABESP",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "17281106000103": {
+        "cnpj": "17281106000103",
+        "razao_social": "COMPANHIA DE SANEAMENTO DE MINAS GERAIS - COPASA",
+        "nome_fantasia": "COPASA",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "MG",
+        "municipio": "BELO HORIZONTE",
+        "identificador_matriz_filial": 1,
+    },
+    "76484013000145": {
+        "cnpj": "76484013000145",
+        "razao_social": "COMPANHIA DE SANEAMENTO DO PARANA - SANEPAR",
+        "nome_fantasia": "SANEPAR",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "PR",
+        "municipio": "CURITIBA",
+        "identificador_matriz_filial": 1,
+    },
+    "17155730000164": {
+        "cnpj": "17155730000164",
+        "razao_social": "COMPANHIA ENERGETICA DE MINAS GERAIS - CEMIG",
+        "nome_fantasia": "CEMIG",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "MG",
+        "municipio": "BELO HORIZONTE",
+        "identificador_matriz_filial": 1,
+    },
+    "10835932000108": {
+        "cnpj": "10835932000108",
+        "razao_social": "COMPANHIA ENERGETICA DE PERNAMBUCO - CELPE (NEOENERGIA PERNAMBUCO)",
+        "nome_fantasia": "NEOENERGIA PERNAMBUCO",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "PE",
+        "municipio": "RECIFE",
+        "identificador_matriz_filial": 1,
+    },
+    "01083200000118": {
+        "cnpj": "01083200000118",
+        "razao_social": "NEOENERGIA S.A.",
+        "nome_fantasia": "NEOENERGIA",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "RJ",
+        "municipio": "RIO DE JANEIRO",
+        "identificador_matriz_filial": 1,
+    },
+    "15139629000194": {
+        "cnpj": "15139629000194",
+        "razao_social": "COMPANHIA DE ELETRICIDADE DO ESTADO DA BAHIA - COELBA (NEOENERGIA COELBA)",
+        "nome_fantasia": "NEOENERGIA COELBA",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "BA",
+        "municipio": "SALVADOR",
+        "identificador_matriz_filial": 1,
+    },
+    "61695227000193": {
+        "cnpj": "61695227000193",
+        "razao_social": "ENEL DISTRIBUICAO SAO PAULO",
+        "nome_fantasia": "ENEL SP",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "BARUERI",
+        "identificador_matriz_filial": 1,
+    },
+    "07047251000170": {
+        "cnpj": "07047251000170",
+        "razao_social": "ENEL DISTRIBUICAO RIO",
+        "nome_fantasia": "ENEL RJ",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "RJ",
+        "municipio": "NITEROI",
+        "identificador_matriz_filial": 1,
+    },
+    "03220438000173": {
+        "cnpj": "03220438000173",
+        "razao_social": "EQUATORIAL ENERGIA S.A.",
+        "nome_fantasia": "EQUATORIAL",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "DF",
+        "municipio": "BRASILIA",
+        "identificador_matriz_filial": 1,
+    },
+    "33000167000101": {
+        "cnpj": "33000167000101",
+        "razao_social": "PETROLEO BRASILEIRO S.A. - PETROBRAS",
+        "nome_fantasia": "PETROBRAS",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "RJ",
+        "municipio": "RIO DE JANEIRO",
+        "identificador_matriz_filial": 1,
+    },
+    "33592510000154": {
+        "cnpj": "33592510000154",
+        "razao_social": "VALE S.A.",
+        "nome_fantasia": "VALE",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "RJ",
+        "municipio": "RIO DE JANEIRO",
+        "identificador_matriz_filial": 1,
+    },
+    "07526557000100": {
+        "cnpj": "07526557000100",
+        "razao_social": "AMBEV S.A.",
+        "nome_fantasia": "AMBEV",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "02916265000160": {
+        "cnpj": "02916265000160",
+        "razao_social": "JBS S/A",
+        "nome_fantasia": "JBS",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "02558157000162": {
+        "cnpj": "02558157000162",
+        "razao_social": "TELEFONICA BRASIL S.A.",
+        "nome_fantasia": "VIVO",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "02421421000111": {
+        "cnpj": "02421421000111",
+        "razao_social": "TIM S.A.",
+        "nome_fantasia": "TIM",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "RJ",
+        "municipio": "RIO DE JANEIRO",
+        "identificador_matriz_filial": 1,
+    },
+    "40432544000147": {
+        "cnpj": "40432544000147",
+        "razao_social": "CLARO S.A.",
+        "nome_fantasia": "CLARO",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
+    "34028316000103": {
+        "cnpj": "34028316000103",
+        "razao_social": "EMPRESA BRASILEIRA DE CORREIOS E TELEGRAFOS",
+        "nome_fantasia": "CORREIOS",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "DF",
+        "municipio": "BRASILIA",
+        "identificador_matriz_filial": 1,
+    },
+    "47960950000121": {
+        "cnpj": "47960950000121",
+        "razao_social": "MAGAZINE LUIZA S.A.",
+        "nome_fantasia": "MAGALU",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "FRANCA",
+        "identificador_matriz_filial": 1,
+    },
+    "03007331000141": {
+        "cnpj": "03007331000141",
+        "razao_social": "MERCADOLIVRE.COM ATIVIDADES DE INTERNET LTDA.",
+        "nome_fantasia": "MERCADO LIVRE",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "OSASCO",
+        "identificador_matriz_filial": 1,
+    },
+    "10573521000191": {
+        "cnpj": "10573521000191",
+        "razao_social": "MERCADO PAGO INSTITUICAO DE PAGAMENTO LTDA.",
+        "nome_fantasia": "MERCADO PAGO",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "OSASCO",
+        "identificador_matriz_filial": 1,
+    },
+    "14380200000121": {
+        "cnpj": "14380200000121",
+        "razao_social": "IFOOD.COM AGENCIA DE RESTAURANTES ONLINE S.A.",
+        "nome_fantasia": "IFOOD",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "OSASCO",
+        "identificador_matriz_filial": 1,
+    },
+    "53113791000122": {
+        "cnpj": "53113791000122",
+        "razao_social": "TOTVS S.A.",
+        "nome_fantasia": "TOTVS",
+        "descricao_situacao_cadastral": "ATIVA",
+        "uf": "SP",
+        "municipio": "SAO PAULO",
+        "identificador_matriz_filial": 1,
+    },
 }
 
 
@@ -889,22 +1415,26 @@ def compute_calibrated_exposure_and_solvency(
     # 1. Tratamento específico quando o Capital Social é 0 (ou ainda em consolidação cadastral)
     if total_capital_num <= 0:
         if total_processes == 0:
-            prob_insolvencia = 5.0
+            prob_insolvencia = 0.0
             solvency_damping_factor = 0.20
             risco_subsidiario = 0.0
-            calibrated_exposure_score = 5.0
+            calibrated_exposure_score = 0.0
             cenario_tipo = "CENARIO_A"
             cenario_badge = "Cenário A · Sem Passivo Identificado"
             cenario_titulo = "Cenário A: Idoneidade Econômica Preservada • Sem Registros Processuais"
             cenario_descricao = (
                 "Nenhum processo trabalhista ou condenação foi localizado nas bases públicas oficiais do Judiciário (CNJ). "
-                "Como não há litígios cadastrados, o risco de exposição ou redirecionamento subsidiário ao tomador de serviços é inexistente."
+                "Como não há litígios cadastrados, o risco de exposição ou redirecionamento subsidiário ao tomador de serviços é inexistente (0,0%)."
             )
         elif total_processes <= 5:
             prob_insolvencia = 20.0
             solvency_damping_factor = 0.50
-            calibrated_exposure_score = round(min(95.0, max(5.0, raw_conviction_prob_pct * solvency_damping_factor)), 1)
-            risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
+            if raw_conviction_prob_pct <= 0.0:
+                calibrated_exposure_score = 0.0
+                risco_subsidiario = 0.0
+            else:
+                calibrated_exposure_score = round(min(95.0, max(1.0, raw_conviction_prob_pct * solvency_damping_factor)), 1)
+                risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
             cenario_tipo = "CENARIO_A"
             cenario_badge = "Cenário A · Baixo Volume Processual"
             cenario_titulo = "Cenário A: Idoneidade Econômica • Volume Processual Reduzido"
@@ -915,8 +1445,12 @@ def compute_calibrated_exposure_and_solvency(
         else:
             prob_insolvencia = 65.0
             solvency_damping_factor = 0.95
-            calibrated_exposure_score = round(min(95.0, max(5.0, raw_conviction_prob_pct * solvency_damping_factor)), 1)
-            risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
+            if raw_conviction_prob_pct <= 0.0:
+                calibrated_exposure_score = 0.0
+                risco_subsidiario = 0.0
+            else:
+                calibrated_exposure_score = round(min(95.0, max(1.0, raw_conviction_prob_pct * solvency_damping_factor)), 1)
+                risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
             cenario_tipo = "CENARIO_B"
             cenario_badge = "Cenário B · Capital Não Localizado"
             cenario_titulo = "Cenário B: Risco Subsidiário • Capital Social Não Localizado"
@@ -965,12 +1499,15 @@ def compute_calibrated_exposure_and_solvency(
         solvency_damping_factor = 0.95
 
     # Score de Exposição Financeira Ajustado pelo Capital Social (Card 1 do Topo)
-    calibrated_exposure_score = round(
-        min(95.0, max(5.0, raw_conviction_prob_pct * solvency_damping_factor)), 1
-    )
-
-    # Risco de Exposição Subsidiária / Calote (Card inferior): P(Condenação Bruta) * P(Insolvência)
-    risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
+    if raw_conviction_prob_pct <= 0.0 or total_processes == 0:
+        calibrated_exposure_score = 0.0
+        risco_subsidiario = 0.0
+    else:
+        calibrated_exposure_score = round(
+            min(95.0, max(1.0, raw_conviction_prob_pct * solvency_damping_factor)), 1
+        )
+        # Risco de Exposição Subsidiária / Calote (Card inferior): P(Condenação Bruta) * P(Insolvência)
+        risco_subsidiario = round((raw_conviction_prob_pct / 100.0) * (prob_insolvencia / 100.0) * 100.0, 1)
 
     formatted_capital = f"R$ {total_capital_num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
